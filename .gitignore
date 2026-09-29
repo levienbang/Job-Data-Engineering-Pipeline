@@ -1,0 +1,27 @@
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+.serena/
+
+# Python tooling
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+
+# Pipeline data and local databases
+data/**
+!data/.gitkeep
+*.parquet
+*.duckdb
+*.db
+
+# OS files
+.DS_Store
