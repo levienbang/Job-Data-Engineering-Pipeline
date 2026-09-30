@@ -6,6 +6,16 @@ This repository implements the Job Data Engineering Pipeline. Read
 `docs/PROJECT_SPEC.md` before architectural changes and implement only the
 milestone requested by the user.
 
+## Current milestone
+
+Milestone 8 — Delivery-ready pipeline. Read
+`docs/MILESTONE_8_DELIVERY_READY.md` and implement it phase by phase.
+
+- The user authorized that file; for this milestone it overrides sections 7
+  (Gold contract) and 11 (Delivery) of `docs/PROJECT_SPEC.md`.
+- Only change this repository. Do not modify the AI Platform repository
+  (`../LLM`) or `docs/PROJECT_SPEC.md`.
+
 ## Working rules
 
 - Inspect relevant code before editing and preserve existing user changes.

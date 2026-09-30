@@ -23,5 +23,8 @@ data/**
 *.duckdb
 *.db
 
+# Private documents such as CVs
+*.pdf
+
 # OS files
 .DS_Store
