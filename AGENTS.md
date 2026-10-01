@@ -8,13 +8,11 @@ milestone requested by the user.
 
 ## Current milestone
 
-Milestone 8 — Delivery-ready pipeline. Read
-`docs/MILESTONE_8_DELIVERY_READY.md` and implement it phase by phase.
-
-- The user authorized that file; for this milestone it overrides sections 7
-  (Gold contract) and 11 (Delivery) of `docs/PROJECT_SPEC.md`.
-- Only change this repository. Do not modify the AI Platform repository
-  (`../LLM`) or `docs/PROJECT_SPEC.md`.
+Read `docs/CURRENT_MILESTONE.md`. The user authorized that file; it is
+overwritten for each new milestone. Where it conflicts with
+`docs/PROJECT_SPEC.md`, the current milestone file wins for that milestone
+only. Do not modify the AI Platform repository (`../LLM`). If the file says the
+milestone is complete, do not re-implement it; wait for a new request.
 
 ## Working rules
 
