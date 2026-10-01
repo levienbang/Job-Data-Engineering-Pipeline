@@ -34,10 +34,8 @@ from job_pipeline.metadata import DeliveryRecord, PipelineRun, make_session_fact
 from job_pipeline.pipeline import run_fake_jobs, run_pipeline
 from job_pipeline.quality import quality_report
 from job_pipeline.service import execute_fake_jobs
-from job_pipeline.sources.fake_jobs import FakeJobRecord
 from job_pipeline.sources.vietjobs import (
     SOURCE_FIELDS,
-    compose_vietjobs_description,
     map_vietjobs_row,
 )
 from job_pipeline.storage import read_parquet, write_parquet
@@ -62,7 +60,7 @@ def sessions(tmp_path: Path):
 
 def _gold(tmp_path: Path, count: int = 3) -> Path:
     records = [
-        FakeJobRecord(
+        dict(
             title=f"Engineer {n}",
             company="Acme",
             location="Paris",
@@ -94,9 +92,7 @@ def test_vietjobs_v2_fields_hash_and_description() -> None:
         field: clean_text(value) if isinstance(value, str) else value
         for field, value in asdict(job).items()
     }
-    expected = compose_vietjobs_description(
-        {key: clean_text(value) for key, value in row.items()}
-    )
+    expected = "Description:\nVận hành hệ thống xử lý nước thải.\n\nExperience:\n1 năm"
     assert compose_import_description(cleaned) == expected
 
 
@@ -116,7 +112,7 @@ def test_v2_validation_and_old_gold_error(tmp_path: Path) -> None:
 def test_quality_reports_new_metrics_without_removing_near_duplicates(
     tmp_path: Path,
 ) -> None:
-    first = FakeJobRecord(
+    first = dict(
         title="Same",
         company="Acme",
         location="Paris",
@@ -124,7 +120,7 @@ def test_quality_reports_new_metrics_without_removing_near_duplicates(
         source_url="https://realpython.github.io/fake-jobs/1.html",
         posted_at=None,
     )
-    second = replace(first, source_url="https://realpython.github.io/fake-jobs/2.html")
+    second = {**first, "source_url": "https://realpython.github.io/fake-jobs/2.html"}
     gold = run_fake_jobs([first, second], collected_at=NOW, root=tmp_path).gold_path
     report = quality_report(gold)
     assert report["count"] == 2
@@ -494,7 +490,7 @@ def test_legacy_success_and_retry_single_rejected_record(
 def test_service_run_status_for_rejection_and_failed_batch(
     sessions, tmp_path: Path
 ) -> None:
-    record = FakeJobRecord(
+    record = dict(
         title="Engineer",
         company="Acme",
         location="Paris",
@@ -531,7 +527,7 @@ def test_service_run_status_for_rejection_and_failed_batch(
         run = session.get(PipelineRun, "rejected")
         assert (run.status, run.rejected_count) == ("succeeded", 1)
 
-    changed = replace(record, title="Different")
+    changed = {**record, "title": "Different"}
     with httpx.Client(
         transport=httpx.MockTransport(lambda request: httpx.Response(413))
     ) as client:
@@ -555,13 +551,13 @@ def test_v1_record_is_quarantined_and_csv_e2e_does_not_redeliver(
 ) -> None:
     from job_pipeline import stages
 
-    original = stages._map_job
+    original = stages.MAPPERS["fake_jobs"]
 
-    def old_version(source, raw, collected_at):
-        return replace(original(source, raw, collected_at), schema_version=1)
+    def old_version(raw, *, collected_at):
+        return replace(original(raw, collected_at=collected_at), schema_version=1)
 
-    monkeypatch.setattr(stages, "_map_job", old_version)
-    fake = FakeJobRecord(
+    monkeypatch.setitem(stages.MAPPERS, "fake_jobs", old_version)
+    fake = dict(
         title="Engineer",
         company="Acme",
         location="Paris",
@@ -572,7 +568,7 @@ def test_v1_record_is_quarantined_and_csv_e2e_does_not_redeliver(
     invalid = run_fake_jobs([fake], collected_at=NOW, root=tmp_path / "invalid")
     quarantine = read_parquet(invalid.quarantine_path)
     assert quarantine["error_code"][0] == "VALIDATION_ERROR"
-    monkeypatch.setattr(stages, "_map_job", original)
+    monkeypatch.setitem(stages.MAPPERS, "fake_jobs", original)
 
     with FIXTURE.open(newline="", encoding="utf-8") as stream:
         rows = list(csv.DictReader(stream))
@@ -690,7 +686,7 @@ def test_send_null_releases_records_blocked_by_missing_company(
 ) -> None:
     gold = run_fake_jobs(
         [
-            FakeJobRecord(
+            dict(
                 title="Engineer",
                 company=None,
                 location="Paris",

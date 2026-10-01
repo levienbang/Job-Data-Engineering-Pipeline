@@ -4,7 +4,6 @@ import hashlib
 import json
 import logging
 import os
-from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
 from uuid import NAMESPACE_URL, uuid5
@@ -74,7 +73,7 @@ def acquire_task(**context: object) -> dict[str, str]:
         return {"source": source, "path": str(path), "checksum": sha256_file(path)}
 
     with FakeJobsCrawler() as crawler:
-        records = [asdict(record) for record in crawler.iter_records()]
+        records = list(crawler.iter_raw())
     content = json.dumps(
         records, ensure_ascii=False, sort_keys=True, default=str
     ).encode()

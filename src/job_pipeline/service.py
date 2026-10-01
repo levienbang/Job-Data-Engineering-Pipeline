@@ -2,7 +2,7 @@
 
 import logging
 import os
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
@@ -20,7 +20,6 @@ from job_pipeline.config import DeliveryConfig
 from job_pipeline.delivery import DeliveryReport, deliver_gold
 from job_pipeline.pipeline import PipelineResult, run_fake_jobs, run_vietjobs
 from job_pipeline.quality import quality_report
-from job_pipeline.sources.fake_jobs import FakeJobRecord
 
 LOGGER = logging.getLogger(__name__)
 
@@ -111,7 +110,7 @@ def execute_vietjobs(
 
 
 def execute_fake_jobs(
-    records: Iterable[FakeJobRecord],
+    records: Iterable[Mapping[str, object]],
     *,
     run_id: str,
     collected_at: datetime,

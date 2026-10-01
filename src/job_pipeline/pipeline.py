@@ -1,15 +1,18 @@
-"""Standalone Bronze → Silver → Gold pipeline for the two supported sources."""
+"""One acquisition path for both sources.
+
+iter_raw → snapshot_bronze → validate_clean_bronze (map source rows)
+→ publish_silver → deduplicate_gold → quality → export → deliver.
+"""
 
 import json
 from collections.abc import Iterable, Mapping
-from dataclasses import asdict, dataclass, replace
+from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
 
 import polars as pl
 
-from job_pipeline.contracts import CanonicalJob
-from job_pipeline.sources.fake_jobs import FakeJobRecord, map_fake_job
+from job_pipeline.sources.fake_jobs import map_fake_jobs_row
 from job_pipeline.sources.vietjobs import VietJobsDatasetSource, map_vietjobs_row
 from job_pipeline.storage import sha256_file
 
@@ -102,27 +105,7 @@ def _json(value: Mapping[str, object]) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, default=str)
 
 
-def _map_job(
-    source: str, raw: dict[str, object], collected_at: datetime
-) -> CanonicalJob:
-    if source == "vietjobs":
-        return map_vietjobs_row(raw, collected_at=collected_at)
-    if source == "fake_jobs":
-        posted_at = raw.get("posted_at")
-        if isinstance(posted_at, str):
-            posted_at = datetime.fromisoformat(posted_at)
-        return map_fake_job(
-            FakeJobRecord(
-                title=raw["title"],
-                company=raw.get("company"),
-                location=raw.get("location"),
-                description=raw["description"],
-                source_url=raw["source_url"],
-                posted_at=posted_at,
-            ),
-            collected_at=collected_at,
-        )
-    raise ValueError(f"unsupported source: {source}")
+MAPPERS = {"vietjobs": map_vietjobs_row, "fake_jobs": map_fake_jobs_row}
 
 
 def run_pipeline(
@@ -158,7 +141,7 @@ def run_pipeline(
     )
 
 
-def read_vietjobs_rows(csv_path: Path) -> list[dict[str, str | None]]:
+def read_vietjobs_rows(csv_path: Path) -> list[dict[str, object]]:
     """Validate the published CSV header and decode source rows for acquisition."""
     import csv
 
@@ -167,7 +150,7 @@ def read_vietjobs_rows(csv_path: Path) -> list[dict[str, str | None]]:
             header = next(csv.reader(stream), [])
         if set(header) != VIETJOBS_COLUMNS or len(header) != len(VIETJOBS_COLUMNS):
             raise SchemaDriftError("VietJobs CSV columns differ from published schema")
-        return list(VietJobsDatasetSource(csv_path).iter_rows())
+        return list(VietJobsDatasetSource(csv_path).iter_raw())
     except (UnicodeError, csv.Error) as exc:
         raise CorruptInputError(f"cannot parse VietJobs CSV: {csv_path}") from exc
 
@@ -183,14 +166,14 @@ def run_vietjobs(
 
 
 def run_fake_jobs(
-    records: Iterable[FakeJobRecord],
+    records: Iterable[Mapping[str, object]],
     *,
     collected_at: datetime,
     root: Path = Path("data"),
 ) -> PipelineResult:
     return run_pipeline(
         "fake_jobs",
-        (asdict(record) for record in records),
+        records,
         collected_at=collected_at,
         root=root,
     )

@@ -30,7 +30,6 @@ from job_pipeline.metadata import (
 )
 from job_pipeline.pipeline import run_fake_jobs
 from job_pipeline.service import execute_fake_jobs
-from job_pipeline.sources.fake_jobs import FakeJobRecord
 
 NOW = datetime(2026, 9, 30, tzinfo=UTC)
 
@@ -53,7 +52,7 @@ def sessions(tmp_path: Path):
 
 
 def _gold(tmp_path: Path, *, company: str | None = "Example Labs") -> Path:
-    record = FakeJobRecord(
+    record = dict(
         title="Engineer",
         company=company,
         location="Paris",
@@ -254,7 +253,7 @@ def test_missing_company_is_held_without_http(sessions, tmp_path: Path) -> None:
 def test_standalone_service_tracks_run_and_source_checkpoint(
     sessions, tmp_path: Path
 ) -> None:
-    record = FakeJobRecord(
+    record = dict(
         title="Engineer",
         company="Example Labs",
         location="Paris",
@@ -357,7 +356,7 @@ def test_new_gold_record_does_not_redeliver_successful_record(
             endpoint="https://example.test/jobs/import",
             client=client,
         )
-        second = FakeJobRecord(
+        second = dict(
             title="Second Engineer",
             company="Example Labs",
             location="Paris",

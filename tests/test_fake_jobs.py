@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -14,7 +15,7 @@ from job_pipeline.sources.fake_jobs import (
     LIST_URL,
     FakeJobsCrawler,
     RawHtmlPage,
-    map_fake_job,
+    map_fake_jobs_row,
     parse_detail_page,
     parse_list_page,
 )
@@ -47,7 +48,10 @@ def test_detail_parsing_and_canonical_mapping() -> None:
     )
     assert record.company == "Example Labs"
     assert record.location == "Hanoi, Vietnam"
-    job = map_fake_job(record, collected_at=datetime(2026, 9, 30, tzinfo=UTC))
+    job = map_fake_jobs_row(
+        {**asdict(record), "posted_at": record.posted_at.isoformat()},
+        collected_at=datetime(2026, 9, 30, tzinfo=UTC),
+    )
     assert job.source_name == "fake_jobs"
     assert job.source_job_id is None
     assert job.source_url == first.detail_url
@@ -254,11 +258,16 @@ def test_crawler_rerun_yields_same_hashes_and_no_duplicate_links(
         crawler = FakeJobsCrawler(
             client=client,
             raw_html_dir=tmp_path,
-            parsed_records_dir=tmp_path / "parsed",
             min_request_interval_seconds=0,
         )
-        first = list(crawler.iter_jobs(collected_at=datetime(2026, 9, 30, tzinfo=UTC)))
-        second = list(crawler.iter_jobs(collected_at=datetime(2026, 10, 1, tzinfo=UTC)))
+        first = [
+            map_fake_jobs_row(raw, collected_at=datetime(2026, 9, 30, tzinfo=UTC))
+            for raw in crawler.iter_raw()
+        ]
+        second = [
+            map_fake_jobs_row(raw, collected_at=datetime(2026, 10, 1, tzinfo=UTC))
+            for raw in crawler.iter_raw()
+        ]
     assert len(first) == len(second) == 2
     assert [job.source_record_hash for job in first] == [
         job.source_record_hash for job in second
@@ -266,8 +275,3 @@ def test_crawler_rerun_yields_same_hashes_and_no_duplicate_links(
     assert first[0].collected_at != second[0].collected_at
     assert len(requested) == 6
     assert len(list(tmp_path.rglob("*.html"))) == 3
-    parsed = list((tmp_path / "parsed").glob("*.json"))
-    assert len(parsed) == 2
-    assert {json.loads(path.read_text())["source_record_hash"] for path in parsed} == {
-        job.source_record_hash for job in first
-    }

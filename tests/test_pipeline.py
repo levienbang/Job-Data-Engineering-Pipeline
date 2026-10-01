@@ -17,23 +17,23 @@ from job_pipeline.pipeline import (
     run_vietjobs,
 )
 from job_pipeline.quality import quality_report
-from job_pipeline.sources.fake_jobs import LIST_URL, FakeJobRecord, FakeJobsCrawler
+from job_pipeline.sources.fake_jobs import LIST_URL, FakeJobsCrawler
 from job_pipeline.storage import read_parquet
 
 NOW = datetime(2026, 9, 30, tzinfo=UTC)
 
 
-def fake_record(**changes: object) -> FakeJobRecord:
+def fake_record(**changes: object) -> dict[str, object]:
     values = {
         "title": "  Cafe\u0301   Engineer  ",
         "company": " Example   Labs ",
         "location": " New   York ",
         "description": " Build   APIs.\n\n  Test   them. ",
         "source_url": "https://realpython.github.io/fake-jobs/job-1.html",
-        "posted_at": datetime(2026, 9, 1, tzinfo=UTC),
+        "posted_at": datetime(2026, 9, 1, tzinfo=UTC).isoformat(),
     }
     values.update(changes)
-    return FakeJobRecord(**values)
+    return dict(**values)
 
 
 def test_fake_jobs_round_trip_cleaning_quality_and_rerun(tmp_path: Path) -> None:
@@ -175,12 +175,9 @@ def test_crawler_fixture_records_reach_bronze_and_gold(tmp_path: Path) -> None:
         with FakeJobsCrawler(
             client=client,
             raw_html_dir=tmp_path / "raw_html",
-            parsed_records_dir=tmp_path / "parsed",
             min_request_interval_seconds=0,
         ) as crawler:
-            result = run_fake_jobs(
-                crawler.iter_records(), collected_at=NOW, root=tmp_path
-            )
+            result = run_fake_jobs(crawler.iter_raw(), collected_at=NOW, root=tmp_path)
     assert result.input_count == 2
     assert read_parquet(result.gold_path).height == 2
     assert len(list((tmp_path / "raw_html").rglob("*.html"))) == 3

@@ -46,7 +46,7 @@ def main(argv: list[str] | None = None) -> int:
             else:
                 with FakeJobsCrawler() as crawler:
                     result = run_fake_jobs(
-                        crawler.iter_records(), collected_at=now, root=args.root
+                        crawler.iter_raw(), collected_at=now, root=args.root
                     )
             print(json.dumps(quality_report(result.gold_path), ensure_ascii=False))
             return 0

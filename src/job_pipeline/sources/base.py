@@ -1,11 +1,11 @@
-"""Minimal source boundary for milestone 1."""
+"""Raw acquisition boundary shared by the supported sources."""
 
 from collections.abc import Iterator
-from datetime import datetime
-from typing import Protocol
-
-from job_pipeline.contracts import CanonicalJob
+from typing import Protocol, runtime_checkable
 
 
-class SourceAdapter(Protocol):
-    def iter_jobs(self, *, collected_at: datetime) -> Iterator[CanonicalJob]: ...
+@runtime_checkable
+class RawSource(Protocol):
+    source_name: str
+
+    def iter_raw(self) -> Iterator[dict[str, object]]: ...

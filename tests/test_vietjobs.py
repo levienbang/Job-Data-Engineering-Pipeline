@@ -4,10 +4,10 @@ from pathlib import Path
 
 import pytest
 
-from job_pipeline.sources.base import SourceAdapter
+from job_pipeline.delivery import compose_import_description
+from job_pipeline.sources.base import RawSource
 from job_pipeline.sources.vietjobs import (
     VietJobsDatasetSource,
-    compose_vietjobs_description,
     map_vietjobs_row,
 )
 
@@ -16,8 +16,10 @@ COLLECTED_AT = datetime(2026, 9, 29, tzinfo=UTC)
 
 
 def test_vietjobs_subset_maps_to_canonical_contract() -> None:
-    source: SourceAdapter = VietJobsDatasetSource(FIXTURE)
-    jobs = list(source.iter_jobs(collected_at=COLLECTED_AT))
+    source: RawSource = VietJobsDatasetSource(FIXTURE)
+    jobs = [
+        map_vietjobs_row(raw, collected_at=COLLECTED_AT) for raw in source.iter_raw()
+    ]
 
     assert len(jobs) == 2
     first = jobs[0]
@@ -74,52 +76,52 @@ def test_missing_required_column_is_rejected(tmp_path: Path) -> None:
     csv_path.write_text("job_title,location\nKỹ Sư,hà nội\n", encoding="utf-8")
 
     with pytest.raises(ValueError, match="description"):
-        list(VietJobsDatasetSource(csv_path).iter_jobs(collected_at=COLLECTED_AT))
+        list(VietJobsDatasetSource(csv_path).iter_raw())
 
 
 def test_composition_with_description_only_preserves_source_text() -> None:
-    row = {"description": "  Build APIs.  ", "requirements_text": " "}
+    row = {"raw_description": "  Build APIs.  ", "raw_requirements": " "}
 
-    assert compose_vietjobs_description(row) == "Build APIs."
+    assert compose_import_description(row) == "Build APIs."
 
 
 def test_composition_adds_labelled_requirements() -> None:
-    row = {"description": "Build APIs.", "requirements_text": "Know Python."}
+    row = {"raw_description": "Build APIs.", "raw_requirements": "Know Python."}
 
-    assert compose_vietjobs_description(row) == (
+    assert compose_import_description(row) == (
         "Description:\nBuild APIs.\n\nRequirements:\nKnow Python."
     )
 
 
 def test_composition_preserves_all_distinct_source_sections() -> None:
     row = {
-        "description": "Build APIs.",
-        "requirements_text": "Know Python.",
-        "experience_required": "2 years",
-        "technical_skills": "['Python', 'SQL']",
-        "qualifications": "['Bachelor degree']",
+        "raw_description": "Build APIs.",
+        "raw_requirements": "Know Python.",
+        "raw_experience": "2 years",
+        "raw_technical_skills": "['Python', 'SQL']",
+        "raw_qualifications": "['Bachelor degree']",
     }
 
-    assert compose_vietjobs_description(row) == (
+    assert compose_import_description(row) == (
         "Description:\nBuild APIs.\n\nRequirements:\nKnow Python."
         "\n\nExperience:\n2 years\n\nTechnical skills:\n['Python', 'SQL']"
         "\n\nQualifications:\n['Bachelor degree']"
     )
-    assert compose_vietjobs_description(dict(reversed(list(row.items())))) == (
-        compose_vietjobs_description(row)
+    assert compose_import_description(dict(reversed(list(row.items())))) == (
+        compose_import_description(row)
     )
 
 
 def test_composition_omits_null_empty_and_identical_sections() -> None:
     row = {
-        "description": "Build APIs.",
-        "requirements_text": "  build   APIs.  ",
-        "experience_required": None,
-        "technical_skills": "  ",
-        "qualifications": "Bachelor degree",
+        "raw_description": "Build APIs.",
+        "raw_requirements": "  build   APIs.  ",
+        "raw_experience": None,
+        "raw_technical_skills": "  ",
+        "raw_qualifications": "Bachelor degree",
     }
 
-    assert compose_vietjobs_description(row) == (
+    assert compose_import_description(row) == (
         "Description:\nBuild APIs.\n\nQualifications:\nBachelor degree"
     )
 
@@ -139,7 +141,7 @@ def test_source_hash_changes_with_new_requirements_but_not_collection_time() -> 
 
 
 def test_raw_rows_are_available_for_separate_selection() -> None:
-    rows = list(VietJobsDatasetSource(FIXTURE).iter_rows())
+    rows = list(VietJobsDatasetSource(FIXTURE).iter_raw())
 
     assert len(rows) == 2
     assert rows[0]["job_title"] == "Kỹ Sư Môi Trường"

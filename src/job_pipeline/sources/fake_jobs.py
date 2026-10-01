@@ -5,8 +5,8 @@ from __future__ import annotations
 import hashlib
 import json
 import time
-from collections.abc import Callable, Iterator
-from dataclasses import dataclass
+from collections.abc import Callable, Iterator, Mapping
+from dataclasses import asdict, dataclass
 from datetime import UTC, date, datetime
 from datetime import time as datetime_time
 from pathlib import Path
@@ -180,16 +180,21 @@ def parse_detail_page(html: str, *, card: FakeJobCard) -> FakeJobRecord:
     )
 
 
-def map_fake_job(record: FakeJobRecord, *, collected_at: datetime) -> CanonicalJob:
+def map_fake_jobs_row(
+    raw: Mapping[str, object], *, collected_at: datetime
+) -> CanonicalJob:
     """Hash source content independently of crawl time for idempotent reruns."""
+    posted_at = raw.get("posted_at")
+    if isinstance(posted_at, str):
+        posted_at = datetime.fromisoformat(posted_at)
     content = json.dumps(
         {
-            "source_url": record.source_url,
-            "title": record.title,
-            "company": record.company,
-            "location": record.location,
-            "description": record.description,
-            "posted_at": record.posted_at.isoformat() if record.posted_at else None,
+            "source_url": raw["source_url"],
+            "title": raw["title"],
+            "company": raw.get("company"),
+            "location": raw.get("location"),
+            "description": raw["description"],
+            "posted_at": posted_at.isoformat() if posted_at else None,
         },
         ensure_ascii=False,
         sort_keys=True,
@@ -198,58 +203,28 @@ def map_fake_job(record: FakeJobRecord, *, collected_at: datetime) -> CanonicalJ
     return CanonicalJob(
         source_name="fake_jobs",
         source_job_id=None,
-        source_url=record.source_url,
-        raw_title=record.title,
-        raw_company=record.company,
-        raw_location=record.location,
+        source_url=raw["source_url"],
+        raw_title=raw["title"],
+        raw_company=raw.get("company"),
+        raw_location=raw.get("location"),
         raw_employment_type=None,
-        raw_description=record.description,
-        posted_at=record.posted_at,
+        raw_description=raw["description"],
+        posted_at=posted_at,
         collected_at=collected_at,
         source_record_hash=hashlib.sha256(content.encode("utf-8")).hexdigest(),
     )
 
 
-def persist_parsed_record(
-    record: FakeJobRecord, *, source_record_hash: str, root: Path
-) -> Path:
-    """Store one content-addressed source record across repeated crawls."""
-    root.mkdir(parents=True, exist_ok=True)
-    path = root / f"{source_record_hash}.json"
-    if not path.exists():
-        path.write_text(
-            json.dumps(
-                {
-                    "source_name": "fake_jobs",
-                    "source_record_hash": source_record_hash,
-                    "source_url": record.source_url,
-                    "title": record.title,
-                    "company": record.company,
-                    "location": record.location,
-                    "description": record.description,
-                    "posted_at": (
-                        record.posted_at.isoformat() if record.posted_at else None
-                    ),
-                },
-                ensure_ascii=False,
-                sort_keys=True,
-                indent=2,
-            )
-            + "\n",
-            encoding="utf-8",
-        )
-    return path
-
-
 class FakeJobsCrawler:
     """Bounded, rate-limited crawler for the one allowlisted practice site."""
+
+    source_name = "fake_jobs"
 
     def __init__(
         self,
         *,
         list_url: str = LIST_URL,
         raw_html_dir: Path = Path("data/raw_html/fake_jobs"),
-        parsed_records_dir: Path = Path("data/parsed/fake_jobs"),
         client: httpx.Client | None = None,
         timeout_seconds: float = 10.0,
         min_request_interval_seconds: float = 1.0,
@@ -267,7 +242,6 @@ class FakeJobsCrawler:
             raise ValueError("Retry configuration is invalid")
         self.list_url = list_url
         self.raw_html_dir = raw_html_dir
-        self.parsed_records_dir = parsed_records_dir
         self.timeout_seconds = timeout_seconds
         self.min_request_interval_seconds = min_request_interval_seconds
         self.max_attempts = max_attempts
@@ -341,12 +315,11 @@ class FakeJobsCrawler:
             detail_page = self.fetch_page(card.detail_url)
             yield parse_detail_page(detail_page.html, card=card)
 
-    def iter_jobs(self, *, collected_at: datetime) -> Iterator[CanonicalJob]:
+    def iter_raw(self) -> Iterator[dict[str, object]]:
+        """Yield source fields for Bronze, retaining HTML acquisition audits."""
         for record in self.iter_records():
-            job = map_fake_job(record, collected_at=collected_at)
-            persist_parsed_record(
-                record,
-                source_record_hash=job.source_record_hash,
-                root=self.parsed_records_dir,
+            raw = asdict(record)
+            raw["posted_at"] = (
+                record.posted_at.isoformat() if record.posted_at else None
             )
-            yield job
+            yield raw

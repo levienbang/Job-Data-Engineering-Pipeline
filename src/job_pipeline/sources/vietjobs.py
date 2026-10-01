@@ -29,18 +29,6 @@ def _optional(value: str | None) -> str | None:
     return value if value and value.strip() else None
 
 
-def compose_vietjobs_description(row: Mapping[str, str | None]) -> str:
-    """Compatibility wrapper for the published CSV shape."""
-    from job_pipeline.delivery import compose_import_description
-
-    return compose_import_description(
-        {
-            "raw_description": row.get("description"),
-            **{target: row.get(source) for target, source in SOURCE_FIELDS.items()},
-        }
-    )
-
-
 def map_vietjobs_row(
     row: Mapping[str, str | None], *, collected_at: datetime
 ) -> CanonicalJob:
@@ -80,12 +68,14 @@ def map_vietjobs_row(
 
 
 class VietJobsDatasetSource:
-    """Stream raw or canonical records from a local copy of the published CSV."""
+    """Stream raw records from a local copy of the published CSV."""
+
+    source_name = "vietjobs"
 
     def __init__(self, csv_path: Path) -> None:
         self.csv_path = csv_path
 
-    def iter_rows(self) -> Iterator[dict[str, str | None]]:
+    def iter_raw(self) -> Iterator[dict[str, object]]:
         """Keep acquisition independent from optional downstream selection."""
         with self.csv_path.open(newline="", encoding="utf-8-sig") as source:
             reader = csv.DictReader(source)
@@ -95,7 +85,3 @@ class VietJobsDatasetSource:
                     f"VietJobs CSV missing columns: {', '.join(sorted(missing))}"
                 )
             yield from reader
-
-    def iter_jobs(self, *, collected_at: datetime) -> Iterator[CanonicalJob]:
-        for row in self.iter_rows():
-            yield map_vietjobs_row(row, collected_at=collected_at)

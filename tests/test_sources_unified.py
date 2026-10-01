@@ -6,16 +6,20 @@ from pathlib import Path
 import httpx
 
 from job_pipeline.contracts import CanonicalJob
-from job_pipeline.sources.base import SourceAdapter
-from job_pipeline.sources.fake_jobs import LIST_URL, FakeJobsCrawler
-from job_pipeline.sources.vietjobs import VietJobsDatasetSource
+from job_pipeline.sources.base import RawSource
+from job_pipeline.sources.fake_jobs import LIST_URL, FakeJobsCrawler, map_fake_jobs_row
+from job_pipeline.sources.vietjobs import VietJobsDatasetSource, map_vietjobs_row
 
 FIXTURES = Path(__file__).parent / "fixtures"
 COLLECTED_AT = datetime(2026, 9, 30, tzinfo=UTC)
 
 
-def _collect(source: SourceAdapter) -> list[CanonicalJob]:
-    return list(source.iter_jobs(collected_at=COLLECTED_AT))
+def _collect(source: RawSource) -> list[CanonicalJob]:
+    assert isinstance(source, RawSource)
+    mapper = {"vietjobs": map_vietjobs_row, "fake_jobs": map_fake_jobs_row}[
+        source.source_name
+    ]
+    return [mapper(raw, collected_at=COLLECTED_AT) for raw in source.iter_raw()]
 
 
 def test_vietjobs_and_fake_jobs_share_the_canonical_contract(tmp_path: Path) -> None:
@@ -37,10 +41,12 @@ def test_vietjobs_and_fake_jobs_share_the_canonical_contract(tmp_path: Path) -> 
         with FakeJobsCrawler(
             client=client,
             raw_html_dir=tmp_path,
-            parsed_records_dir=tmp_path / "parsed",
             min_request_interval_seconds=0,
         ) as fake_source:
-            fake_job = next(iter(fake_source.iter_jobs(collected_at=COLLECTED_AT)))
+            assert isinstance(fake_source, RawSource)
+            fake_job = map_fake_jobs_row(
+                next(fake_source.iter_raw()), collected_at=COLLECTED_AT
+            )
 
     for job in [*vietjobs, fake_job]:
         assert isinstance(job, CanonicalJob)

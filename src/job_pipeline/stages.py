@@ -16,12 +16,12 @@ from job_pipeline.deduplicate import identity
 from job_pipeline.pipeline import (
     CANONICAL_SCHEMA,
     FAKE_JOBS_COLUMNS,
+    MAPPERS,
     VIETJOBS_COLUMNS,
     CorruptInputError,
     SchemaDriftError,
     _empty_jobs,
     _json,
-    _map_job,
 )
 from job_pipeline.sources.technology import is_technology_job
 from job_pipeline.storage import read_parquet, sha256_file, write_parquet
@@ -90,12 +90,14 @@ def validate_clean_bronze(
 ) -> CleanStage:
     """Validate each row; write staged Silver candidates and explicit quarantine."""
     source = bronze.source
+    if source not in MAPPERS:
+        raise ValueError(f"unsupported source: {source}")
     frame = read_parquet(bronze.path)
     mapped: list[CanonicalJob] = []
     lineage: list[dict[str, object]] = []
     quarantine: list[dict[str, object]] = []
     filtered = 0
-    for row in frame.iter_rows(named=True):
+    for row in frame.to_dicts():
         raw = json.loads(row["raw_record_json"])
         if not isinstance(raw, dict):
             quarantine.append(
@@ -117,7 +119,9 @@ def validate_clean_bronze(
             if source == "vietjobs" and not is_technology_job(raw):
                 filtered += 1
                 continue
-            job = _map_job(source, raw, datetime.fromisoformat(row["collected_at"]))
+            job = MAPPERS[source](
+                raw, collected_at=datetime.fromisoformat(row["collected_at"])
+            )
             for field in (
                 "raw_title",
                 "raw_description",
@@ -150,9 +154,7 @@ def validate_clean_bronze(
         )
 
     valid: list[dict[str, object]] = []
-    for row, trace in zip(
-        clean_jobs(mapped).iter_rows(named=True), lineage, strict=True
-    ):
+    for row, trace in zip(clean_jobs(mapped).to_dicts(), lineage, strict=True):
         try:
             validated = ValidatedJob.model_validate(row)
         except ValidationError as exc:

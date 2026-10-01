@@ -1,0 +1,82 @@
+{
+  "vietjobs": [
+    {
+      "job_title": "Kỹ Sư Môi Trường",
+      "location": "hồ chí minh",
+      "country": "Việt Nam",
+      "qualifications": "",
+      "technical_skills": "",
+      "soft_skills": "",
+      "languages_required": "",
+      "experience_required": "1 năm",
+      "salary": "15 triệu",
+      "contract_type": "Toàn thời gian",
+      "working_hours": "",
+      "benefits": "",
+      "description": "Vận hành hệ thống xử lý nước thải.",
+      "requirements_text": "",
+      "category": "nông_nghiệp_năng_lượng_môi_trường",
+      "salary_min": "15",
+      "salary_max": "15",
+      "salary_avg": "15 triệu"
+    },
+    {
+      "job_title": "Nhân Viên Kỹ Thuật",
+      "location": "hà nội",
+      "country": "Việt Nam",
+      "qualifications": "",
+      "technical_skills": "",
+      "soft_skills": "",
+      "languages_required": "",
+      "experience_required": "Không yêu cầu",
+      "salary": "Thoả thuận",
+      "contract_type": "",
+      "working_hours": "",
+      "benefits": "",
+      "description": "Bảo trì thiết bị.",
+      "requirements_text": "",
+      "category": "kỹ_thuật",
+      "salary_min": "0",
+      "salary_max": "0",
+      "salary_avg": "Thoả thuận"
+    },
+    {
+      "job_title": "Data Engineer",
+      "location": "hồ chí minh",
+      "country": "Việt Nam",
+      "qualifications": "",
+      "technical_skills": "",
+      "soft_skills": "",
+      "languages_required": "",
+      "experience_required": "1 năm",
+      "salary": "15 triệu",
+      "contract_type": "Toàn thời gian",
+      "working_hours": "",
+      "benefits": "",
+      "description": "Vận hành hệ thống xử lý nước thải.",
+      "requirements_text": "",
+      "category": "công_nghệ_thông_tin_kỹ_thuật_số",
+      "salary_min": "15",
+      "salary_max": "15",
+      "salary_avg": "15 triệu"
+    }
+  ],
+  "fake_jobs": [
+    {
+      "title": "Senior Python Developer",
+      "company": "Example Labs",
+      "location": "Hanoi, Vietnam",
+      "description": "Build Python services.\n\nWork with APIs and databases.",
+      "source_url": "https://realpython.github.io/fake-jobs/jobs/senior-python-developer-0.html",
+      "posted_at": "2021-04-08T00:00:00+00:00"
+    },
+    {
+      "title": "Data Engineer",
+      "company": null,
+      "location": null,
+      "description": "Maintain data pipelines.",
+      "source_url": "https://realpython.github.io/fake-jobs/jobs/data-engineer-1.html",
+      "posted_at": null
+    }
+  ]
+}

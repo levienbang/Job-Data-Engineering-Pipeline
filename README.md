@@ -2,17 +2,25 @@
 
 Repo độc lập để thu thập và tiền xử lý dữ liệu việc làm trước khi gửi sang AI Career Platform qua API `/jobs/import`. AI Career Platform tiếp tục xử lý và lưu dữ liệu vào database của hệ thống đó.
 
-## Luồng dữ liệu dự kiến
+## Luồng chính
 
 ```text
-Fake Jobs / VietJobs
-  → Bronze (raw snapshot)
-  → Silver (clean + validate)
-  → Gold (deduplicate + canonical data)
-  → DeliveryMapper → JSON export + manifest
-  → POST /jobs/import
-  → AI Career Platform
+Source.iter_raw() → snapshot_bronze()
+  → validate_clean_bronze() [map_<source>_row ở đây]
+  → publish_silver() → deduplicate_gold() → quality → export → deliver
+  → POST /jobs/import → AI Career Platform
 ```
+
+| File | Bước và trách nhiệm |
+|---|---|
+| `sources/base.py`, `sources/vietjobs.py`, `sources/fake_jobs.py` | `RawSource.iter_raw()` đọc CSV hoặc HTTP, giữ field nguồn; các mapper là hàm thuần, được gọi sau Bronze. Fake Jobs lưu HTML + metadata để audit. |
+| `pipeline.py` | Entry point chạy các stage và bảng `MAPPERS` cho hai nguồn. |
+| `stages.py` | Snapshot Bronze bất biến → map, lọc IT, clean/validate/quarantine → Silver → deduplicate Gold. |
+| `quality.py` | Kiểm tra chất lượng Gold. |
+| `delivery.py` | `DeliveryMapper` chuyển Gold sang import contract, export JSON theo byte và gửi API. |
+| `service.py`, `workflow.py`, `__main__.py` | Gọi luồng chính qua service, Airflow và CLI. |
+
+Thư mục `data/parsed/` từ các phiên bản cũ không còn được dùng; dữ liệu đã có trong đó được giữ nguyên.
 
 Nguồn dữ liệu ban đầu là trang [Fake Jobs](https://realpython.github.io/fake-jobs/) để thực hành crawling và bộ dữ liệu [VietJobs](https://huggingface.co/datasets/dinhieufam/VietJobs) đã công bố. Repo không ghi trực tiếp vào database của AI Career Platform.
 
@@ -46,7 +54,7 @@ result = run_vietjobs(Path("data/VietJobs.csv"), collected_at=datetime.now(UTC))
 print(result)
 ```
 
-Fake Jobs: truyền `crawler.iter_records()` vào `run_fake_jobs(records, collected_at=...)`; crawler lưu raw HTML trước khi trả parsed record. Kiểm tra Gold bằng `quality_report(result.gold_path)` hoặc chạy các truy vấn trong `sql/quality_checks.sql` bằng DuckDB. File CSV sai schema hoặc không đọc được sẽ dừng trước Bronze; lỗi từng row sẽ vào quarantine và các row khác vẫn tiếp tục.
+Fake Jobs: truyền `crawler.iter_raw()` vào `run_fake_jobs(records, collected_at=...)`; crawler lưu raw HTML trước khi trả dict thô. Kiểm tra Gold bằng `quality_report(result.gold_path)` hoặc chạy các truy vấn trong `sql/quality_checks.sql` bằng DuckDB. File CSV sai schema hoặc không đọc được sẽ dừng trước Bronze; lỗi từng row sẽ vào quarantine và các row khác vẫn tiếp tục.
 
 Kết quả kiểm tra toàn bộ 48.092 dòng VietJobs và giới hạn của dữ liệu nằm trong [ghi chú VietJobs](docs/VIETJOBS_INSPECTION.md). Kiến trúc và các mốc tiếp theo nằm trong [đặc tả dự án](docs/PROJECT_SPEC.md).
 
@@ -120,22 +128,21 @@ Xem schema, số dòng, null và số dòng thuộc phạm vi công nghệ (**ch
 uv run python scripts/inspect_vietjobs.py data/VietJobs.csv
 ```
 
-`VietJobsDatasetSource.iter_rows()` đọc mọi dòng nguồn. Bộ lọc `is_technology_job(row)` được áp dụng sau khi đọc để quyết định dòng nào đi tiếp. Nó giữ category `công_nghệ_thông_tin_kỹ_thuật_số` và một số tiêu đề nghề công nghệ cụ thể ở category khác; không tìm từ khóa chung trong description. Trên toàn bộ file hiện tại, quy tắc giữ 2.043 dòng. Đây là quy tắc xác định phạm vi, chưa phải nhãn đúng tuyệt đối. `source_record_hash` dùng toàn bộ dòng CSV với thứ tự khóa ổn định, nên cùng nội dung có cùng hash khi chạy lại; nó không phải ID bền vững của một tin đã cập nhật.
+`VietJobsDatasetSource.iter_raw()` đọc mọi dòng nguồn. Bộ lọc `is_technology_job(row)` được áp dụng sau khi đọc để quyết định dòng nào đi tiếp. Nó giữ category `công_nghệ_thông_tin_kỹ_thuật_số` và một số tiêu đề nghề công nghệ cụ thể ở category khác; không tìm từ khóa chung trong description. Trên toàn bộ file hiện tại, quy tắc giữ 2.043 dòng. Đây là quy tắc xác định phạm vi, chưa phải nhãn đúng tuyệt đối. `source_record_hash` dùng toàn bộ dòng CSV với thứ tự khóa ổn định, nên cùng nội dung có cùng hash khi chạy lại; nó không phải ID bền vững của một tin đã cập nhật.
 
 ## Thử Fake Jobs thủ công
 
-Đoạn sau **dùng mạng**, lấy tối đa hai công việc và lưu HTML, metadata, bản ghi đã parse trong `data/`:
+Đoạn sau **dùng mạng**, lấy tối đa hai công việc và lưu HTML và metadata trong `data/raw_html/fake_jobs/`:
 
 ```bash
 uv run python - <<'PY'
-from datetime import UTC, datetime
 from itertools import islice
 
 from job_pipeline.sources.fake_jobs import FakeJobsCrawler
 
 with FakeJobsCrawler() as source:
-    for job in islice(source.iter_jobs(collected_at=datetime.now(UTC)), 2):
-        print(job.source_url, job.raw_title, job.source_record_hash)
+    for raw in islice(source.iter_raw(), 2):
+        print(raw["source_url"], raw["title"])
 PY
 ```
 
