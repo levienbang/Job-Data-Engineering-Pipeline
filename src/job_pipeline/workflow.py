@@ -4,6 +4,7 @@ import hashlib
 import json
 import logging
 import os
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from uuid import NAMESPACE_URL, uuid5
@@ -191,6 +192,9 @@ def quality_check_task(**context: object) -> dict[str, object]:
 def export_payload_task(**context: object) -> str:
     path = Path(context["ti"].xcom_pull(task_ids="deduplicate_gold"))
     config = DeliveryConfig.from_env()
+    if "PIPELINE_EXPORT_ROOT" not in os.environ:
+        # Keep exports with the run's data, as service.py does, not under the cwd.
+        config = replace(config, export_root=_root() / "export")
     manifest = export_batches(
         path,
         run_id=_run_id(context),

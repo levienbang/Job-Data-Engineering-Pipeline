@@ -88,6 +88,9 @@ def test_workflow_stages_and_missing_company_hold(monkeypatch, tmp_path: Path) -
         ti.values[name] = function(**context)
     assert ti.values["quality_check"]["count"] == 1
     ti.values["export_payload"] = workflow.export_payload_task(**context)
+    assert Path(ti.values["export_payload"]).is_relative_to(
+        tmp_path / "data" / "export"
+    )
     assert workflow.deliver_task(**context)["delivered_records"] == 0
     with sessions() as session:
         assert session.scalar(select(PipelineRun)).status == "succeeded"
