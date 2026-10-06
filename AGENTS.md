@@ -35,6 +35,30 @@ Use Serena for semantic code navigation.
 - Verify implementation details against current source code.
 - Store only durable architectural decisions and project conventions in memory.
 - Source code and `docs/PROJECT_SPEC.md` override stale Serena memories.
+- Memories live in `.serena/memories/`; start from `core` and follow its `mem:`
+  references. Follow `memory_maintenance` for style and the update threshold.
+
+## Keeping docs and memory current
+
+Every task that changes code is incomplete until these are checked. Update only
+what the change actually affects; do not rewrite unrelated sections.
+
+| Change | Update |
+|---|---|
+| Source map, module responsibility, data layout, milestone state | Serena `core` |
+| Data invariant, hashing, dedup, quarantine, delivery/retry semantics, payload contract | Serena `conventions` + README |
+| Dependency, version pin, new tool | Serena `tech_stack` + `pyproject.toml` |
+| New/changed CLI command, script or flag | Serena `suggested_commands` + README |
+| New/changed check or completion gate | Serena `task_completion` |
+| New environment variable | `.env.example` + README variable table |
+| Milestone finished | `docs/CURRENT_MILESTONE.md` set to the "no active milestone" note listing what finished; Serena `core` state line |
+
+- Use Serena `write_memory`/`edit_memory`. If Serena is not active for this
+  repository, edit the files in `.serena/memories/` directly.
+- Write memories as dense, durable bullets; never put logs, line numbers, temporary
+  debugging notes or secrets in them. Delete or fix a memory that the change made
+  wrong instead of appending a contradiction.
+- If nothing needed updating, say so in the final report.
 
 ## Architecture
 
@@ -77,3 +101,5 @@ Snowflake are optional and must not be added unless explicitly requested.
 - Test reruns, duplicates and expected failures.
 - Distinguish fake/deterministic tests from live integrations.
 - Report modified files, commands, actual results and remaining limitations.
+- Report which docs and Serena memories were updated (see "Keeping docs and
+  memory current"), or state that none needed changes.
