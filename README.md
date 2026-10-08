@@ -90,6 +90,128 @@ Migration không tạo bảng application jobs. Có thể chạy `alembic downgr
 
 DAG [dags/job_pipeline.py](dags/job_pipeline.py) chạy `acquire → bronze → validate_clean → silver → deduplicate_gold → quality_check → export_payload → deliver`. `DELIVERY_ENABLED=false` giữ export nhưng bỏ qua POST, kết thúc run `succeeded` với `delivered_count=0`. Đặt `PIPELINE_SOURCE`, `PIPELINE_DATA_ROOT`, `VIETJOBS_CSV_PATH`, `PIPELINE_DATABASE_URL`, `AI_PLATFORM_IMPORT_URL` và `PIPELINE_SCHEDULE`; mặc định `@daily`. DAG có 2 retries, timeout 30 phút mỗi task, `catchup=True` và `max_active_runs=1`.
 
+## Chạy bằng Docker
+
+Docker Compose chạy PostgreSQL 17 và Airflow 2.10.5 / Python 3.12 với
+`LocalExecutor`. Image cài project theo constraints có sẵn của Airflow, giữ
+SQLAlchemy 1.4.54 và chạy `pip check` khi build. Không copy dataset hay secrets
+vào image. PostgreSQL có hai database và role riêng: `job_pipeline` cho DE,
+`airflow` cho Airflow; init chạy migrations cho cả hai trước khi khởi động
+scheduler và webserver.
+
+| Dịch vụ | Cổng host | Địa chỉ trong container |
+|---|---|---|
+| Crawl PostgreSQL | `127.0.0.1:5433` | `postgres:5432` |
+| Airflow UI | `127.0.0.1:8080` | `airflow:8080` |
+| AI Platform (`../LLM`) | `8000` | `host.docker.internal:8000` |
+
+Cổng `5432` của host được giữ cho PostgreSQL của LLM. Compose chỉ dùng database
+riêng của Crawl; giao tiếp sang LLM qua HTTP.
+
+1. Copy `.env.example` thành `.env` (git-ignored). Thay mọi giá trị
+   `replace-with-...`, dùng mật khẩu DB dạng hex để an toàn trong URL.
+   Tạo mỗi secret hex bằng `openssl rand -hex 32`; tạo Fernet key bằng lệnh ghi
+   trong `.env.example`. `AIRFLOW_ADMIN_USERNAME`, `AIRFLOW_ADMIN_PASSWORD` và
+   `AIRFLOW_ADMIN_EMAIL` dùng để tạo tài khoản khi init lần đầu. Đổi `.env`
+   sau đó không tự đổi mật khẩu user/database đã tồn tại.
+2. Đặt CSV local ở `data/VietJobs_sample.csv`. `VIETJOBS_CSV_PATH` trong `.env`
+   là đường dẫn tương đối dưới repo (ví dụ `data/VietJobs_sample.csv`); Compose
+   chuyển thành `/opt/airflow/data/VietJobs_sample.csv`. `PIPELINE_DATABASE_URL`,
+   `PIPELINE_DATA_ROOT`, `PIPELINE_EXPORT_ROOT` và `AI_PLATFORM_IMPORT_URL` trong
+   Compose dùng địa chỉ container, thay cho giá trị dành cho CLI host.
+3. Chạy:
+
+```bash
+docker compose build
+docker compose up -d
+docker compose ps -a
+docker compose exec airflow python -m pip check
+docker compose exec airflow alembic check
+```
+
+Mở [Airflow UI](http://localhost:8080), đăng nhập bằng tài khoản trong `.env`.
+`postgres` và `airflow` phải `healthy`; `airflow-init` phải `Exited (0)`.
+DAG **giữ paused khi khởi động** (`DAGS_ARE_PAUSED_AT_CREATION=True`) vì
+`catchup=True` sẽ chạy bù từ 2026-09-30 nếu unpause. `dags test` vẫn chạy DAG
+paused và không cần bật scheduler cho DAG này.
+
+Chạy sample bằng Airflow thật, không POST sang LLM (lệnh này đọc CSV local và
+kết nối PostgreSQL của Compose):
+
+```bash
+docker compose exec -e VIETJOBS_CSV_PATH=/opt/airflow/data/VietJobs_sample.csv -e DELIVERY_ENABLED=false airflow airflow dags test job_data_pipeline "$(date +%F)"
+# Chạy lại đúng lệnh trên để kiểm tra Bronze bất biến và Gold không tăng trùng.
+docker compose exec postgres psql -U postgres -d job_pipeline -c 'SELECT run_id, status, input_count, valid_count, invalid_count, duplicate_count, delivered_count FROM pipeline_runs;'
+```
+
+Tám task phải success: `acquire`, `bronze`, `validate_clean`, `silver`,
+`deduplicate_gold`, `quality_check`, `export_payload`, `deliver`.
+`DELIVERY_ENABLED` mặc định **false trong Compose**; vẫn export và đóng run
+`succeeded`, `delivered_count=0`. Với chính sách company mặc định, các record
+VietJobs thiếu company được ghi `blocked` trong delivery metadata.
+
+Khi API LLM đang chạy trên host cổng 8000 và bạn muốn thử delivery thật,
+chạy lệnh sau (**gọi API, có thể kích hoạt LLM trả phí**):
+
+```bash
+docker compose exec -e DELIVERY_ENABLED=true -e DELIVERY_PAYLOAD_PROFILE=extended -e DELIVERY_MISSING_COMPANY=send_null airflow airflow dags test job_data_pipeline "$(date +%F)"
+```
+
+Chỉ dùng `extended` khi API hỗ trợ contract đó. Compose trỏ tới
+`http://host.docker.internal:8000/jobs/import`; không dùng `localhost` trong
+container và không truy cập PostgreSQL/Qdrant của LLM. Để áp dụng cấu hình
+`.env` cho scheduler, chạy lại `docker compose up -d`.
+
+Dữ liệu nằm trong bind mount `./data`; logs nằm trong volume `airflow-logs`,
+config Airflow tự sinh nằm cùng volume ở `logs/airflow.cfg`. Dừng và giữ metadata:
+
+```bash
+docker compose down
+```
+
+Xóa **metadata PostgreSQL và logs của Crawl** để khởi tạo lại:
+
+```bash
+docker compose down -v
+```
+
+`down -v` không xóa `./data`; Gold/Bronze vẫn còn. Không dùng lệnh này nếu cần
+giữ checkpoint delivery. Linux: đặt `AIRFLOW_UID` bằng `id -u` và đảm bảo
+`data/` ghi được bởi UID đó; macOS Docker Desktop dùng mặc định `50000`.
+
+### Kết quả chạy thật M8.2 — 2026-10-08
+
+`docker compose build` thành công, `python -m pip check` không có conflict;
+Airflow 2.10.5, SQLAlchemy 1.4.54, DuckDB 1.1.3, Polars 1.44.2.
+PostgreSQL và Airflow healthy, init exit 0; `alembic check` không có migration
+thiếu. Hai database có owner riêng và hai role không có quyền CONNECT chéo.
+
+| CSV / lần chạy | Input | Valid | Invalid | Filtered | Duplicate | Gold |
+|---|---:|---:|---:|---:|---:|---:|
+| `VietJobs_sample.csv`, lần 1 | 5 | 0 | 0 | 5 | 0 | 0 |
+| `VietJobs_sample.csv`, lần 2 | 5 | 0 | 0 | 5 | 0 | 0 |
+| Subset IT local, lần 1 | 5 | 5 | 0 | 0 | 0 | 5 |
+| Subset IT local, lần 2 | 5 | 5 | 0 | 0 | 5 | 5 |
+
+Cả bốn lần đều có **8/8 task success**, gồm acquire, bronze, validate_clean,
+silver, deduplicate_gold, quality_check, export_payload và deliver. Sample
+có sẵn không thuộc IT, nên để kiểm tra Gold có dữ liệu đã lấy thêm năm dòng IT
+thật từ `data/VietJobs.csv` vào `data/VietJobs_it_sample.csv` (git-ignored),
+không sửa các CSV gốc. Hai lần bổ sung dùng cùng ngày với logical time
+`2026-10-08T01:00:00+00:00` và override `VIETJOBS_CSV_PATH` trong lệnh `dags test`.
+
+Bronze giữ nguyên checksum và mtime sau rerun; Gold IT giữ năm hash duy nhất.
+Hai logical run trong `pipeline_runs` đều `succeeded`, `delivered_count=0`;
+rerun cùng logical date cập nhật cùng run ID. Năm record IT bị `blocked` bởi
+chính sách company mặc định. DAG vẫn paused, không có scheduled catchup run.
+API LLM cổng 8000 phản hồi HTTP 200 ở `/openapi.json`; bỏ qua bước import live
+tùy chọn, tất cả DAG run dùng `DELIVERY_ENABLED=false`.
+
+Checks hiện có: focused DAG/M8 tests **19 passed**; `uv run pytest` **93 passed**
+(hai Airflow deprecation warnings); Ruff lint và format pass. Tests dùng
+fixtures/HTTP giả; các lần `dags test` ở trên dùng Airflow và PostgreSQL thật,
+CSV local, không gọi website hoặc LLM.
+
 ## Export và delivery thủ công
 
 ```bash
@@ -108,7 +230,7 @@ uv run python -m job_pipeline deliver --source vietjobs --endpoint http://localh
 | `DELIVERY_MAX_RECORDS` | `20` | tối đa record trong batch |
 | `DELIVERY_TIMEOUT_SECONDS` | `300` | timeout mỗi POST |
 | `DELIVERY_MAX_ATTEMPTS` | `3` | số lần thử tối đa |
-| `DELIVERY_ENABLED` | `true` | `false` để chỉ export trong DAG |
+| `DELIVERY_ENABLED` | `true` (Python), `false` (Compose) | `false` để chỉ export trong DAG |
 | `PIPELINE_EXPORT_ROOT` | `data/export` | thư mục export |
 
 Profile `ai_platform_v1` gửi đúng sáu key: `title`, `company`, `location`, `employment_type`, `description`, `source_url`. Profile `extended` thêm lineage (`source_name`, `source_record_hash`, `posted_at`) và các field gốc còn lại theo tên không có tiền tố `raw_`; chỉ dùng khi endpoint hỗ trợ. Xem checkpoint bằng `SELECT record_key, status, error, updated_at FROM delivery_records;` trong metadata DB.
@@ -147,3 +269,23 @@ PY
 ```
 
 Không commit dataset, raw dumps, Parquet output, `.env` hoặc credentials. Các file dữ liệu dùng khi chạy pipeline được lưu ở `data/` trên máy local.
+
+Các biến cấu hình chung và Compose:
+
+| Biến | Giá trị / ý nghĩa |
+|---|---|
+| `VIETJOBS_CSV_PATH` | CSV local; Compose thêm prefix `/opt/airflow/` |
+| `PIPELINE_SOURCE` | `vietjobs` hoặc `fake_jobs` (Fake Jobs gọi mạng) |
+| `PIPELINE_SCHEDULE` | `@daily` |
+| `PIPELINE_DATA_ROOT` | `data` trên host, `/opt/airflow/data` trong Compose |
+| `PIPELINE_DATABASE_URL` | URL metadata DE; host dùng cổng `5433`, Compose dùng `postgres:5432` |
+| `AI_PLATFORM_IMPORT_URL` | Host: `http://localhost:8000/jobs/import`; Compose: `http://host.docker.internal:8000/jobs/import` |
+| `POSTGRES_PASSWORD` | Mật khẩu role quản trị PostgreSQL của Crawl |
+| `PIPELINE_DB_PASSWORD` | Mật khẩu role `job_pipeline` (Compose tạo URL DE) |
+| `AIRFLOW_DB_PASSWORD` | Mật khẩu role `airflow` |
+| `AIRFLOW_ADMIN_USERNAME` | Username UI tạo khi init |
+| `AIRFLOW_ADMIN_PASSWORD` | Mật khẩu UI tạo khi init |
+| `AIRFLOW_ADMIN_EMAIL` | Email admin, mặc định `admin@example.invalid` |
+| `AIRFLOW_FERNET_KEY` | Fernet key hợp lệ để mã hóa Airflow connections |
+| `AIRFLOW_WEBSERVER_SECRET_KEY` | Secret dùng chung cho webserver và scheduler |
+| `AIRFLOW_UID` | UID container, mặc định `50000` |
