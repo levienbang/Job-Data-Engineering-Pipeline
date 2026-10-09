@@ -25,7 +25,11 @@ from job_pipeline.sources.arbeitnow import (
     map_arbeitnow_row,
 )
 from job_pipeline.sources.base import RawSource
-from job_pipeline.sources.technology import is_technology_title
+from job_pipeline.sources.technology import (
+    is_technology_title,
+    mentions_technologies,
+    tech_terms,
+)
 
 FIXTURES = Path(__file__).parent / "fixtures" / "arbeitnow"
 NOW = datetime(2026, 10, 9, 12, tzinfo=UTC)
@@ -370,6 +374,27 @@ def test_language_all_fixture_rows_and_threshold():
     assert not is_english("123 _ !")
     assert is_english("the " + "example " * 9)
     assert not is_english("the " + "example " * 10)
+
+
+def test_tech_terms_require_two_distinct_technologies():
+    assert mentions_technologies("We use Python, PostgreSQL and Docker on AWS.")
+    assert not mentions_technologies("Python is great. We love python.")
+    assert not mentions_technologies("Maintain fire alarms and go on site visits.")
+    assert tech_terms("Build C++ and C# services on .NET") == {"c++", "c#", ".net"}
+
+
+def test_french_description_is_not_english():
+    french = (
+        "Nous recherchons pour notre équipe une personne avec vous et les clients. "
+    )
+    assert not is_english(french * 5 + "We are the team for you. ")
+
+
+def test_english_intro_with_german_body_is_not_english():
+    intro = "We are a team and you will work with the product. " * 2
+    body = "Wir suchen dich und du arbeitest mit der Firma für die Kunden. " * 6
+    assert not is_english(intro + body)
+    assert is_english(intro * 3 + "Wir suchen dich und du arbeitest. ")
     assert (
         description_text("<h2>Title</h2><p>we <b>build</b> systems<br>for you</p>")
         == "Title\nwe build systems\nfor you"
@@ -395,9 +420,10 @@ def test_language_all_fixture_rows_and_threshold():
         "Computer Vision Engineer - Tracker",
         "AI Solutions Engineer",
         "Data Analyst (m/f/d)",
-        "Forward Deployed Engineer",
-        "Solutions Architect",
-        "Engineering Manager (all genders)",
+        "Hackers wanted – Software Engineers",
+        "Tech Lead, Android Core Product - Zurich, Switzerland",
+        "Head of Software Engineering (d/f/m)",
+        "Data Science Lead",
     ],
 )
 def test_it_keeps(title):
@@ -419,6 +445,18 @@ def test_it_keeps(title):
         "Electrical Design Engineer & Machine Safety Specialist (M/F)",
         "Screening and Escalations Senior Payment Analyst",
         "German-Speaking Architectural Draftsperson / Project Architect",
+        "Fire Alarm Service and Maintenance Engineer - Brighton & Hove",
+        "Propellant Quality Control Engineer",
+        "Senior Value Engineer - Aviation/Logistics",
+        "Senior Strategic Procurement Engineer (m/f/d)",
+        "Technical Product Manager",
+        "Enterprise Sales Lead - Healthcare",
+        # Precision-first: generic titles without an IT qualifier are dropped.
+        "Forward Deployed Engineer",
+        "Solutions Architect",
+        "Engineering Manager (all genders)",
+        "Customer Success Engineer",
+        "Lead Product Designer - Agentic AI",
     ],
 )
 def test_it_rejects(title):
@@ -436,16 +474,17 @@ def test_end_to_end_rerun_and_raw_preservation(tmp_path, caplog):
         first.valid_count,
         first.invalid_count,
         first.filtered_count,
-    ) == (15, 8, 0, 7)
+    ) == (15, 6, 0, 9)
     bronze = pl.read_parquet(first.bronze_path)
     assert [json.loads(r) for r in bronze["raw_record_json"]] == [
         r for p in pages() for r in p["data"]
     ]
     assert "reason=language count=6" in caplog.text
-    assert "reason=not_it count=1" in caplog.text
+    assert "reason=not_it count=2" in caplog.text
+    assert "reason=no_tech_terms count=1" in caplog.text
     gold = pl.read_parquet(first.gold_path)
     assert set(gold["raw_title"]) == {
-        *[pages()[0]["data"][i]["title"] for i in (3, 6, 7)],
+        pages()[0]["data"][7]["title"],
         *[pages()[1]["data"][i]["title"] for i in (0, 1, 3, 5, 6)],
     }
     original = first.bronze_path.read_bytes()
@@ -456,7 +495,7 @@ def test_end_to_end_rerun_and_raw_preservation(tmp_path, caplog):
         root=tmp_path,
         collected_at=NOW + timedelta(hours=1),
     )
-    assert second.duplicate_count == 8
+    assert second.duplicate_count == 6
     assert pl.read_parquet(second.gold_path).equals(gold)
     assert first.bronze_path.read_bytes() == original
 
@@ -522,7 +561,7 @@ def test_cli_rerun_uses_watermark_and_never_delivers(monkeypatch, tmp_path, caps
             __main__.main(["run", "--source", "arbeitnow", "--root", str(tmp_path)])
             == 0
         )
-        assert json.loads(capsys.readouterr().out)["count"] == 3
+        assert json.loads(capsys.readouterr().out)["count"] == 1
     assert seen[0] == {"max_pages": 1, "watermark": None}
     assert seen[1] == {"max_pages": 1, "watermark": arbeitnow_watermark(tmp_path)}
 

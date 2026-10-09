@@ -25,7 +25,11 @@ from job_pipeline.pipeline import (
     _json,
 )
 from job_pipeline.sources.arbeitnow import REQUIRED_COLUMNS, is_english
-from job_pipeline.sources.technology import is_technology_job, is_technology_title
+from job_pipeline.sources.technology import (
+    is_technology_job,
+    is_technology_title,
+    mentions_technologies,
+)
 from job_pipeline.storage import read_parquet, sha256_file, write_parquet
 from job_pipeline.validate import ValidatedJob
 
@@ -99,7 +103,7 @@ def validate_clean_bronze(
     lineage: list[dict[str, object]] = []
     quarantine: list[dict[str, object]] = []
     filtered = 0
-    reasons = {"language": 0, "not_it": 0}
+    reasons = {"language": 0, "not_it": 0, "no_tech_terms": 0}
     for row in frame.to_dicts():
         raw = json.loads(row["raw_record_json"])
         if not isinstance(raw, dict):
@@ -153,13 +157,15 @@ def validate_clean_bronze(
             )
             continue
         if source == "arbeitnow":
-            reason = (
-                "language"
-                if not is_english(job.raw_description)
-                else "not_it"
-                if not is_technology_title(job.raw_title)
-                else None
-            )
+            # Precision-first: every check must pass; any failure drops the job.
+            if not is_english(job.raw_description):
+                reason = "language"
+            elif not is_technology_title(job.raw_title):
+                reason = "not_it"
+            elif not mentions_technologies(job.raw_description):
+                reason = "no_tech_terms"
+            else:
+                reason = None
             if reason:
                 reasons[reason] += 1
                 filtered += 1
@@ -174,9 +180,18 @@ def validate_clean_bronze(
         )
 
     if source == "arbeitnow":
+        logger = logging.getLogger(__name__)
         for reason, count in reasons.items():
-            logging.getLogger(__name__).info(
-                "Arbeitnow filtered reason=%s count=%s", reason, count
+            logger.info("Arbeitnow filtered reason=%s count=%s", reason, count)
+        total = frame.height
+        kept_share = len(mapped) / total if total else 0.0
+        # Measured on real pages: 10-25% kept. A large drift usually means the
+        # source format changed rather than the job market.
+        if total >= 50 and not 0.03 <= kept_share <= 0.50:
+            logger.warning(
+                "Arbeitnow kept share %.2f outside expected range (input=%s)",
+                kept_share,
+                total,
             )
 
     valid: list[dict[str, object]] = []

@@ -50,6 +50,48 @@ ENGLISH_STOPWORDS = {
     "to",
     "in",
 }
+# German is the source's main non-English language; mixed descriptions often
+# open in English and continue in German.
+GERMAN_STOPWORDS = {
+    "und",
+    "wir",
+    "die",
+    "der",
+    "für",
+    "mit",
+    "sie",
+    "ihre",
+    "eine",
+    "bei",
+    "oder",
+    "deine",
+    "du",
+    "auf",
+    "ist",
+    "das",
+    "zu",
+    "den",
+    "dich",
+    "von",
+}
+FRENCH_STOPWORDS = {
+    "et",
+    "nous",
+    "les",
+    "des",
+    "pour",
+    "avec",
+    "vous",
+    "votre",
+    "une",
+    "est",
+    "dans",
+    "sur",
+    "le",
+    "la",
+    "du",
+    "au",
+}
 LOGGER = logging.getLogger(__name__)
 
 
@@ -76,10 +118,17 @@ def description_text(value: str) -> str:
 
 
 def is_english(text: str) -> bool:
+    """Strict: English share >= 0.10 and at least twice German and French."""
     words = re.findall(r"[^\W\d_]+", text.casefold())
-    return (
-        bool(words) and sum(w in ENGLISH_STOPWORDS for w in words) / len(words) >= 0.10
-    )
+    if not words:
+        return False
+
+    def share(stopwords: set[str]) -> float:
+        return sum(w in stopwords for w in words) / len(words)
+
+    english = share(ENGLISH_STOPWORDS)
+    other = max(share(GERMAN_STOPWORDS), share(FRENCH_STOPWORDS))
+    return english >= 0.10 and english >= 2 * other
 
 
 def _posted_at(value: object) -> datetime | None:

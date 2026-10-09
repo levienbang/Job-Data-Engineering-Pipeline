@@ -309,11 +309,24 @@ location. Không suy diễn salary, experience hay skills. Hash SHA-256 dùng
 JSON sorted-key của toàn bộ raw record cùng source name, không chứa thời
 điểm thu thập; Gold dedup theo `(arbeitnow, slug)`.
 
-Sau schema check và mapping, chỉ Arbeitnow được lọc tiếng Anh bằng tỷ lệ
-stopword ≥ 0.10 trong description đã bỏ HTML, rồi lọc IT bằng tiêu đề.
-`filtered_count` gồm cả hai lý do; log riêng `language` và `not_it`. Record
-bị lọc không vào quarantine. Đây là heuristic, có thể bỏ sót vai trò hoặc
-mô tả đa ngôn ngữ; bộ lọc VietJobs không đổi.
+Sau schema check và mapping, chỉ Arbeitnow đi qua bộ lọc **ưu tiên chính xác**
+(thà bỏ sót job IT còn hơn để lọt job không phải IT hoặc không phải tiếng Anh).
+Job phải qua cả ba lớp, trượt một lớp là bị loại:
+
+1. `language`: trong description đã bỏ HTML, tỷ lệ stopword tiếng Anh ≥ 0.10
+   và ≥ 2 lần tỷ lệ stopword tiếng Đức hoặc tiếng Pháp (loại tin song ngữ).
+2. `not_it`: tiêu đề chứa vai trò IT rõ ràng (developer, software engineer,
+   data scientist…) hoặc danh từ vai trò (engineer, architect, lead…) đi kèm
+   từ IT (software, data, AI, cloud, security…); loại sales, marketing,
+   manufacturing, product manager, consultant, designer… Tiêu đề chung chung
+   như "Solutions Engineer" bị loại.
+3. `no_tech_terms`: description phải nhắc ít nhất 2 công nghệ cụ thể khác nhau
+   (Python, SQL, AWS, Docker, React…).
+
+`filtered_count` gồm cả ba lý do, log riêng từng lý do; record bị lọc không vào
+quarantine. Log cảnh báo khi tỷ lệ giữ lại nằm ngoài 3–50% (input ≥ 50), dấu
+hiệu nguồn đổi định dạng. Trên 6 trang thật (1.050 job): giữ 140 job sau dedup.
+Bộ lọc VietJobs không đổi.
 
 CLI và Airflow cùng đọc `max(posted_at)` từ Gold Arbeitnow, trừ 60 phút làm
 watermark; chưa có Gold hoặc chưa có ngày đăng thì dùng `None`. Adapter yield

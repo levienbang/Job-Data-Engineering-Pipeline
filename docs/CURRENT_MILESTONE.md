@@ -11,7 +11,7 @@ Milestone 8.3 bổ sung:
 - CLI `run --source arbeitnow`, Airflow acquisition snapshot và
   `ARBEITNOW_MAX_PAGES`; không thêm dependency, DB table hay migration.
 - Tests fixture, rerun/dedup, CLI/workflow; kiểm tra API thật 1 trang mỗi lần,
-  không export/delivery. Gold 46 job lúc Codex kiểm tra; sau khi mở rộng bộ lọc IT, cùng trang cho Gold 82 job.
+  không export/delivery. Bộ lọc Arbeitnow chốt theo hướng ưu tiên chính xác (3 lớp); trên 6 trang thật giữ 140 job.
 
 Xem [báo cáo kiểm tra 8.3](MILESTONE_8_3_VERIFICATION.md) để biết số liệu,
 20 tiêu đề Gold, 10 tiêu đề bị lọc và giới hạn. Lần live thứ hai đọc watermark

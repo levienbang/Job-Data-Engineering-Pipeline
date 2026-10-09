@@ -275,11 +275,11 @@ def test_arbeitnow_workflow_through_quality_twice(monkeypatch, tmp_path):
                 "quality_check",
             ):
                 ti.values[name] = getattr(workflow, f"{name}_task")(**context)
-            assert ti.values["quality_check"]["count"] == 8
-            assert ti.values["validate_clean"]["filtered_count"] == 7
+            assert ti.values["quality_check"]["count"] == 6
+            assert ti.values["validate_clean"]["filtered_count"] == 9
             with sessions() as session:
                 run = _pipeline_run(session, context["run_id"])
                 assert run.input_count == 15
-                assert run.valid_count == 8
+                assert run.valid_count == 6
                 assert run.invalid_count == 0
-                assert run.duplicate_count == (0 if number == 1 else 8)
+                assert run.duplicate_count == (0 if number == 1 else 6)

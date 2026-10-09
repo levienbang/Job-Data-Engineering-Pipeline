@@ -27,9 +27,9 @@ Ngày kiểm tra: 2026-10-09 (Asia/Ho_Chi_Minh).
   **87 passed**; gồm schema drift, bad HTML/values, 404/429/503, timeout/network,
   retry exhaustion, redirects/host lạ, mọi job cũ vs một job cũ ghim đầu,
   ngưỡng tiếng Anh, IT, CLI/workflow, empty/all-filtered, rerun/dedup.
-- Fixture hai trang: Bronze **15**, `language` **6**, `not_it` **1**,
-  quarantine **0**, Gold **8**; rerun **8 duplicates**, Gold không đổi
-  (số sau khi mở rộng bộ lọc IT, xem mục cuối).
+- Fixture hai trang: Bronze **15**, `language` **6**, `not_it` **2**,
+  `no_tech_terms` **1**, quarantine **0**, Gold **6**; rerun **6 duplicates**,
+  Gold không đổi (số sau bộ lọc ưu tiên chính xác, xem mục cuối).
 - Workflow acquire → quality chạy hai lần bằng MockTransport và metadata
   SQLite có migrations; input=15, valid=6, invalid=0, duplicate=0 rồi 6.
 - Toàn bộ suite, Ruff và kiểm tra Compose: xem kết quả cuối bên dưới.
@@ -147,3 +147,27 @@ cache tại `~/.cache/uv`; không cài hoặc đổi dependency để chạy ki�
   Còn giữ vài ca mơ hồ (ví dụ "Founder Associate to the CTO",
   "Graduate Applications Engineer - Rental and Rapid Response").
 - `pytest`: **189 passed**; Ruff lint/format pass.
+
+## Bộ lọc ưu tiên chính xác (chốt với user)
+
+User chấp nhận bỏ sót job IT, miễn job đi qua chắc chắn là tiếng Anh và IT, và
+quy tắc phải tự chạy, không dựa vào việc người xem từng ca. Ba lớp độc lập,
+trượt một lớp là loại: tiếng Anh (≥0.10 và ≥2× tiếng Đức/Pháp), tiêu đề IT
+chặt (vai trò rõ, hoặc danh từ vai trò + từ IT), description nhắc ≥2 công
+nghệ cụ thể. Cảnh báo khi tỷ lệ giữ ngoài 3–50%.
+
+Kiểm tra offline trên 6 trang thật đã lưu (không gọi API thêm):
+
+| Trang | Input | Giữ | Lọc | Quarantine | Trùng |
+|---|---:|---:|---:|---:|---:|
+| 1 | 325 | 51 | 274 | 0 | 0 |
+| 2 | 325 | 45 | 280 | 0 | 0 |
+| 3 | 100 | 20 | 80 | 0 | 2 |
+| 4 | 100 | 9 | 91 | 0 | 0 |
+| 5 | 100 | 15 | 85 | 0 | 6 |
+| 6 | 100 | 8 | 92 | 0 | 0 |
+
+Gold sau dedup: **140 job**. Lớp `no_tech_terms` loại 18 tin qua được tiêu đề
+nhưng không nhắc công nghệ (ví dụ Data Protection Officer, AI transformation
+lead). Bị bỏ sót có chủ đích: Solutions/Forward Deployed Engineer, Engineering
+Manager, vài Tech Lead chỉ nhắc một công nghệ. `pytest`: **204 passed**.
