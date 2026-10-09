@@ -283,7 +283,10 @@ def test_arbeitnow_workflow_through_quality_twice(monkeypatch, tmp_path):
             context = {
                 "ti": ti,
                 "run_id": f"arbeitnow-{number}",
-                "logical_date": datetime(2026, 10, 9, 12, tzinfo=UTC),
+                "params": {"source": "arbeitnow"},
+                # A scheduled run's logical date lies before fresh postings;
+                # live sources must use fetch time or jobs look "in the future".
+                "logical_date": datetime(2026, 9, 1, tzinfo=UTC),
             }
             for name in (
                 "acquire",

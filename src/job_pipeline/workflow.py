@@ -79,6 +79,10 @@ def acquire_task(**context: object) -> dict[str, str]:
         read_vietjobs_rows(path)
         return {"source": source, "path": str(path), "checksum": sha256_file(path)}
 
+    # Live sources are collected now, not at the schedule's logical date: a
+    # daily run's logical date is the previous midnight, which would make
+    # fresh postings look "in the future" and send them to quarantine.
+    collected_at = datetime.now(UTC)
     if source == "arbeitnow":
         adapter = ArbeitnowSource(
             max_pages=arbeitnow_max_pages(), watermark=arbeitnow_watermark(_root())
@@ -91,7 +95,7 @@ def acquire_task(**context: object) -> dict[str, str]:
         records, ensure_ascii=False, sort_keys=True, default=str
     ).encode()
     digest = hashlib.sha256(content).hexdigest()
-    date = _collected_at(context).date().isoformat()
+    date = collected_at.date().isoformat()
     path = (
         _root()
         / "acquired"
@@ -112,7 +116,12 @@ def acquire_task(**context: object) -> dict[str, str]:
                 ) from None
     finally:
         temporary.unlink(missing_ok=True)
-    return {"source": source, "path": str(path), "checksum": digest}
+    return {
+        "source": source,
+        "path": str(path),
+        "checksum": digest,
+        "collected_at": collected_at.isoformat(),
+    }
 
 
 def bronze_task(**context: object) -> dict[str, object]:
@@ -124,9 +133,12 @@ def bronze_task(**context: object) -> dict[str, object]:
         if source == "vietjobs"
         else json.loads(path.read_text())
     )
-    bronze = snapshot_bronze(
-        source, records, collected_at=_collected_at(context), root=_root()
+    collected_at = (
+        datetime.fromisoformat(acquired["collected_at"])
+        if acquired.get("collected_at")
+        else _collected_at(context)
     )
+    bronze = snapshot_bronze(source, records, collected_at=collected_at, root=_root())
     record_source_asset(
         _sessions(),
         source_name=source,

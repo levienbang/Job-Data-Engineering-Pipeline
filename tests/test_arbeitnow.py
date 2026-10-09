@@ -612,7 +612,14 @@ def test_workflow_acquisition_snapshot_and_watermark(monkeypatch, tmp_path):
     run_pipeline(
         "arbeitnow", json.loads(snapshot.read_text()), root=tmp_path, collected_at=NOW
     )
-    assert workflow.acquire_task(**context) == state
+    again = workflow.acquire_task(**context)
+    # Same snapshot path and checksum; collected_at is the real fetch time.
+    assert {k: v for k, v in again.items() if k != "collected_at"} == {
+        k: v for k, v in state.items() if k != "collected_at"
+    }
+    assert datetime.fromisoformat(again["collected_at"]) >= datetime.fromisoformat(
+        state["collected_at"]
+    )
     assert snapshot.stat().st_mtime_ns == original
     assert seen == [
         {"max_pages": 5, "watermark": None},
