@@ -4,6 +4,7 @@ import hashlib
 import json
 import logging
 import os
+from collections.abc import Mapping
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -42,8 +43,10 @@ def _root() -> Path:
     return Path(os.getenv("PIPELINE_DATA_ROOT", "data"))
 
 
-def _source() -> str:
-    source = os.getenv("PIPELINE_SOURCE", "vietjobs")
+def _source(context: Mapping[str, object] | None = None) -> str:
+    """Each DAG passes its source in params; PIPELINE_SOURCE is the fallback."""
+    params = (context or {}).get("params") or {}
+    source = params.get("source") or os.getenv("PIPELINE_SOURCE", "vietjobs")
     if source not in {"vietjobs", "fake_jobs", "arbeitnow"}:
         raise ValueError(f"unsupported PIPELINE_SOURCE: {source}")
     return source
@@ -57,7 +60,9 @@ def _sessions():
 
 
 def _run_id(context: dict) -> str:
-    return str(uuid5(NAMESPACE_URL, f"job_pipeline:{_source()}:{context['run_id']}"))
+    return str(
+        uuid5(NAMESPACE_URL, f"job_pipeline:{_source(context)}:{context['run_id']}")
+    )
 
 
 def _collected_at(context: dict) -> datetime:
@@ -67,7 +72,7 @@ def _collected_at(context: dict) -> datetime:
 
 def acquire_task(**context: object) -> dict[str, str]:
     """Check local VietJobs input or persist acquired HTTP source records."""
-    source = _source()
+    source = _source(context)
     start_run(_sessions(), run_id=_run_id(context), source_name=source)
     if source == "vietjobs":
         path = Path(os.getenv("VIETJOBS_CSV_PATH", "data/VietJobs.csv"))
@@ -173,7 +178,7 @@ def silver_task(**context: object) -> str:
 def deduplicate_gold_task(**context: object) -> str:
     silver_path = Path(context["ti"].xcom_pull(task_ids="silver"))
     gold_path, duplicates = deduplicate_gold(
-        silver_path, source=_source(), root=_root()
+        silver_path, source=_source(context), root=_root()
     )
     bronze = context["ti"].xcom_pull(task_ids="bronze")
     clean = context["ti"].xcom_pull(task_ids="validate_clean")

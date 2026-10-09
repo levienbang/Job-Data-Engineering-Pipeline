@@ -28,7 +28,6 @@ def test_airflow_dag_import_and_dependencies(monkeypatch, tmp_path: Path) -> Non
     module = importlib.util.module_from_spec(spec)
     assert spec.loader is not None
     spec.loader.exec_module(module)
-    dag = module.dag
     expected = [
         "acquire",
         "bronze",
@@ -39,14 +38,34 @@ def test_airflow_dag_import_and_dependencies(monkeypatch, tmp_path: Path) -> Non
         "export_payload",
         "deliver",
     ]
-    assert set(dag.task_ids) == set(expected)
-    assert dag.catchup is True
-    assert dag.max_active_runs == 1
-    for before, after in zip(expected, expected[1:], strict=False):
-        assert dag.get_task(before).downstream_task_ids == {after}
-    for task in dag.tasks:
-        assert task.retries == 2
-        assert task.execution_timeout == timedelta(minutes=30)
+    assert set(module.dags) == {"vietjobs", "arbeitnow"}
+    for source, dag in module.dags.items():
+        assert dag.dag_id == f"job_pipeline_{source}"
+        assert getattr(module, dag.dag_id) is dag
+        assert dag.params["source"] == source
+        assert set(dag.task_ids) == set(expected)
+        assert dag.catchup is False
+        assert dag.max_active_runs == 1
+        for before, after in zip(expected, expected[1:], strict=False):
+            assert dag.get_task(before).downstream_task_ids == {after}
+        for task in dag.tasks:
+            assert task.retries == 2
+            assert task.execution_timeout == timedelta(minutes=30)
+    assert module.dags["vietjobs"].schedule_interval is None
+    assert module.dags["arbeitnow"].schedule_interval == "@daily"
+
+
+def test_dag_params_choose_source_over_environment(monkeypatch) -> None:
+    monkeypatch.setenv("PIPELINE_SOURCE", "vietjobs")
+    context = {"run_id": "manual__1", "params": {"source": "arbeitnow"}}
+    assert workflow._source(context) == "arbeitnow"
+    assert workflow._source({"run_id": "manual__1"}) == "vietjobs"
+    # The same Airflow run id under two DAGs maps to two pipeline runs.
+    assert workflow._run_id(context) != workflow._run_id(
+        {**context, "params": {"source": "vietjobs"}}
+    )
+    with pytest.raises(ValueError, match="unsupported"):
+        workflow._source({"params": {"source": "unknown"}})
 
 
 def test_workflow_stages_and_missing_company_hold(monkeypatch, tmp_path: Path) -> None:

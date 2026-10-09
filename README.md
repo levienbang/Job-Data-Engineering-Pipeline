@@ -88,7 +88,7 @@ Migration không tạo bảng application jobs. Có thể chạy `alembic downgr
 
 DAG (hoặc CLI `run` → `export` → `deliver`) chạy pipeline, quality check, export rồi delivery. Mỗi POST chứa file `jobs.json` trong multipart field `file`. Timeout mặc định 300 giây; timeout, lỗi mạng, 429 và 5xx tạm thời được thử tối đa ba lần. 413 và các 4xx khác không retry. Response 2xx có record lỗi vẫn làm batch `succeeded`: record lỗi là `rejected`, các record còn lại là `accepted`. Response sai contract làm batch `failed`. Không có exactly-once transaction xuyên hai hệ thống.
 
-DAG [dags/job_pipeline.py](dags/job_pipeline.py) chạy `acquire → bronze → validate_clean → silver → deduplicate_gold → quality_check → export_payload → deliver`. `DELIVERY_ENABLED=false` giữ export nhưng bỏ qua POST, kết thúc run `succeeded` với `delivered_count=0`. Đặt `PIPELINE_SOURCE`, `PIPELINE_DATA_ROOT`, `VIETJOBS_CSV_PATH`, `PIPELINE_DATABASE_URL`, `AI_PLATFORM_IMPORT_URL` và `PIPELINE_SCHEDULE`; mặc định `@daily`. DAG có 2 retries, timeout 30 phút mỗi task, `catchup=True` và `max_active_runs=1`.
+[dags/job_pipeline.py](dags/job_pipeline.py) tạo **một DAG cho mỗi nguồn** từ cùng 8 task `acquire → bronze → validate_clean → silver → deduplicate_gold → quality_check → export_payload → deliver`: `job_pipeline_vietjobs` (CSV tĩnh, không lịch, chạy tay) và `job_pipeline_arbeitnow` (lịch `ARBEITNOW_SCHEDULE`, mặc định `@daily`). Mỗi DAG truyền nguồn qua `params.source`, nên hai nguồn chạy độc lập; `PIPELINE_SOURCE` chỉ còn là giá trị dự phòng. `DELIVERY_ENABLED=false` giữ export nhưng bỏ qua POST, kết thúc run `succeeded` với `delivered_count=0`. Đặt `PIPELINE_DATA_ROOT`, `VIETJOBS_CSV_PATH`, `PIPELINE_DATABASE_URL`, `AI_PLATFORM_IMPORT_URL`, `ARBEITNOW_MAX_PAGES` và `ARBEITNOW_SCHEDULE`. Mỗi DAG có 2 retries, timeout 30 phút mỗi task, `catchup=False` (API chỉ trả job hiện tại; CSV không đổi theo ngày) và `max_active_runs=1`. DAG mới được tạo ở trạng thái paused.
 
 ## Chạy bằng Docker
 
@@ -139,7 +139,7 @@ Chạy sample bằng Airflow thật, không POST sang LLM (lệnh này đọc CS
 kết nối PostgreSQL của Compose):
 
 ```bash
-docker compose exec -e VIETJOBS_CSV_PATH=/opt/airflow/data/VietJobs_sample.csv -e DELIVERY_ENABLED=false airflow airflow dags test job_data_pipeline "$(date +%F)"
+docker compose exec -e VIETJOBS_CSV_PATH=/opt/airflow/data/VietJobs_sample.csv -e DELIVERY_ENABLED=false airflow airflow dags test job_pipeline_vietjobs "$(date +%F)"
 # Chạy lại đúng lệnh trên để kiểm tra Bronze bất biến và Gold không tăng trùng.
 docker compose exec postgres psql -U postgres -d job_pipeline -c 'SELECT run_id, status, input_count, valid_count, invalid_count, duplicate_count, delivered_count FROM pipeline_runs;'
 ```
@@ -154,7 +154,7 @@ Khi API LLM đang chạy trên host cổng 8000 và bạn muốn thử delivery 
 chạy lệnh sau (**gọi API, có thể kích hoạt LLM trả phí**):
 
 ```bash
-docker compose exec -e DELIVERY_ENABLED=true -e DELIVERY_PAYLOAD_PROFILE=extended -e DELIVERY_MISSING_COMPANY=send_null airflow airflow dags test job_data_pipeline "$(date +%F)"
+docker compose exec -e DELIVERY_ENABLED=true -e DELIVERY_PAYLOAD_PROFILE=extended -e DELIVERY_MISSING_COMPANY=send_null airflow airflow dags test job_pipeline_vietjobs "$(date +%F)"
 ```
 
 Chỉ dùng `extended` khi API hỗ trợ contract đó. Compose trỏ tới
@@ -275,9 +275,9 @@ Các biến cấu hình chung và Compose:
 | Biến | Giá trị / ý nghĩa |
 |---|---|
 | `VIETJOBS_CSV_PATH` | CSV local; Compose thêm prefix `/opt/airflow/` |
-| `PIPELINE_SOURCE` | `vietjobs`, `fake_jobs` hoặc `arbeitnow` (hai nguồn sau gọi mạng) |
+| `PIPELINE_SOURCE` | Dự phòng khi task không có `params.source`: `vietjobs`, `fake_jobs` hoặc `arbeitnow` |
 | `ARBEITNOW_MAX_PAGES` | `5`, số nguyên ≥ 1; giới hạn trang Arbeitnow cho CLI và Airflow |
-| `PIPELINE_SCHEDULE` | `@daily` |
+| `ARBEITNOW_SCHEDULE` | Lịch DAG `job_pipeline_arbeitnow`, mặc định `@daily` |
 | `PIPELINE_DATA_ROOT` | `data` trên host, `/opt/airflow/data` trong Compose |
 | `PIPELINE_DATABASE_URL` | URL metadata DE; host dùng cổng `5433`, Compose dùng `postgres:5432` |
 | `AI_PLATFORM_IMPORT_URL` | Host: `http://localhost:8000/jobs/import`; Compose: `http://host.docker.internal:8000/jobs/import` |
@@ -340,7 +340,7 @@ dừng sớm. Gold vẫn dedup dữ liệu trong khoảng overlap. Log acquisiti
 ARBEITNOW_MAX_PAGES=1 uv run python -m job_pipeline run --source arbeitnow --root /tmp/arbeitnow-check
 ```
 
-Airflow: đặt `PIPELINE_SOURCE=arbeitnow`, `ARBEITNOW_MAX_PAGES=5`.
+Airflow: bật DAG `job_pipeline_arbeitnow` (hoặc `airflow dags trigger job_pipeline_arbeitnow`); `ARBEITNOW_MAX_PAGES=5`.
 `acquire_task` lưu snapshot JSON bất biến theo hash dưới
 `data/acquired/source=arbeitnow/ingestion_date=<date>/records-<hash>.json`;
 các task Bronze → quality → export → deliver dùng luồng chung. Trong DAG,

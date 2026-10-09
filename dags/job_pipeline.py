@@ -1,4 +1,9 @@
-"""Airflow orchestration for the standalone Job Data Engineering Pipeline."""
+"""Airflow orchestration for the standalone Job Data Engineering Pipeline.
+
+One DAG per source, built from the same tasks. Each DAG passes its source in
+``params`` so sources run independently; delivery still follows
+``DELIVERY_ENABLED``.
+"""
 
 import os
 from datetime import UTC, datetime, timedelta
@@ -24,40 +29,47 @@ DEFAULT_ARGS = {
     "execution_timeout": timedelta(minutes=30),
     "on_failure_callback": log_failure,
 }
+TASKS = (
+    ("acquire", acquire_task),
+    ("bronze", bronze_task),
+    ("validate_clean", validate_clean_task),
+    ("silver", silver_task),
+    ("deduplicate_gold", deduplicate_gold_task),
+    ("quality_check", quality_check_task),
+    ("export_payload", export_payload_task),
+    ("deliver", deliver_task),
+)
+# VietJobs is a static published CSV: run it by hand. Arbeitnow is a live API
+# that only returns current jobs, so past intervals cannot be backfilled.
+SOURCES = {
+    "vietjobs": {"schedule": None, "catchup": False},
+    "arbeitnow": {
+        "schedule": os.getenv("ARBEITNOW_SCHEDULE", "@daily"),
+        "catchup": False,
+    },
+}
 
-with DAG(
-    dag_id="job_data_pipeline",
-    start_date=datetime(2026, 9, 30, tzinfo=UTC),
-    schedule=os.getenv("PIPELINE_SCHEDULE", "@daily"),
-    catchup=True,
-    max_active_runs=1,
-    default_args=DEFAULT_ARGS,
-    tags=["job-pipeline"],
-) as dag:
-    acquire = PythonOperator(task_id="acquire", python_callable=acquire_task)
-    bronze = PythonOperator(task_id="bronze", python_callable=bronze_task)
-    validate_clean = PythonOperator(
-        task_id="validate_clean", python_callable=validate_clean_task
-    )
-    silver = PythonOperator(task_id="silver", python_callable=silver_task)
-    deduplicate_gold = PythonOperator(
-        task_id="deduplicate_gold", python_callable=deduplicate_gold_task
-    )
-    quality_check = PythonOperator(
-        task_id="quality_check", python_callable=quality_check_task
-    )
-    export_payload = PythonOperator(
-        task_id="export_payload", python_callable=export_payload_task
-    )
-    deliver = PythonOperator(task_id="deliver", python_callable=deliver_task)
 
-    (
-        acquire
-        >> bronze
-        >> validate_clean
-        >> silver
-        >> deduplicate_gold
-        >> quality_check
-        >> export_payload
-        >> deliver
-    )
+def build_dag(source: str, *, schedule: str | None, catchup: bool) -> DAG:
+    with DAG(
+        dag_id=f"job_pipeline_{source}",
+        start_date=datetime(2026, 10, 1, tzinfo=UTC),
+        schedule=schedule,
+        catchup=catchup,
+        max_active_runs=1,
+        default_args=DEFAULT_ARGS,
+        params={"source": source},
+        tags=["job-pipeline", source],
+    ) as dag:
+        previous = None
+        for task_id, function in TASKS:
+            task = PythonOperator(task_id=task_id, python_callable=function)
+            if previous is not None:
+                previous >> task
+            previous = task
+    return dag
+
+
+dags = {source: build_dag(source, **settings) for source, settings in SOURCES.items()}
+# Airflow discovers DAG objects in module globals.
+globals().update({dag.dag_id: dag for dag in dags.values()})
