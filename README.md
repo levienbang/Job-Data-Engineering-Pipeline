@@ -18,7 +18,7 @@ Source.iter_raw() → snapshot_bronze()
 | `stages.py` | Snapshot Bronze bất biến → map, lọc IT, clean/validate/quarantine → Silver → deduplicate Gold. |
 | `quality.py` | Kiểm tra chất lượng Gold. |
 | `delivery.py` | `DeliveryMapper` chuyển Gold sang import contract, export JSON theo byte và gửi API. |
-| `service.py`, `workflow.py`, `__main__.py` | Gọi luồng chính qua service, Airflow và CLI. |
+| `workflow.py`, `__main__.py` | Hai lối vào: các task Airflow (DAG) và CLI chạy tay. |
 
 Thư mục `data/parsed/` từ các phiên bản cũ không còn được dùng; dữ liệu đã có trong đó được giữ nguyên.
 
@@ -86,7 +86,7 @@ uv run alembic check
 
 Migration không tạo bảng application jobs. Có thể chạy `alembic downgrade base` trong **database thử nghiệm** để kiểm tra rollback. Không chạy downgrade trên metadata production có dữ liệu.
 
-`execute_vietjobs(...)` và `execute_fake_jobs(...)` chạy pipeline, quality check, export rồi delivery. Mỗi POST chứa file `jobs.json` trong multipart field `file`. Timeout mặc định 300 giây; timeout, lỗi mạng, 429 và 5xx tạm thời được thử tối đa ba lần. 413 và các 4xx khác không retry. Response 2xx có record lỗi vẫn làm batch `succeeded`: record lỗi là `rejected`, các record còn lại là `accepted`. Response sai contract làm batch `failed`. Không có exactly-once transaction xuyên hai hệ thống.
+DAG (hoặc CLI `run` → `export` → `deliver`) chạy pipeline, quality check, export rồi delivery. Mỗi POST chứa file `jobs.json` trong multipart field `file`. Timeout mặc định 300 giây; timeout, lỗi mạng, 429 và 5xx tạm thời được thử tối đa ba lần. 413 và các 4xx khác không retry. Response 2xx có record lỗi vẫn làm batch `succeeded`: record lỗi là `rejected`, các record còn lại là `accepted`. Response sai contract làm batch `failed`. Không có exactly-once transaction xuyên hai hệ thống.
 
 DAG [dags/job_pipeline.py](dags/job_pipeline.py) chạy `acquire → bronze → validate_clean → silver → deduplicate_gold → quality_check → export_payload → deliver`. `DELIVERY_ENABLED=false` giữ export nhưng bỏ qua POST, kết thúc run `succeeded` với `delivered_count=0`. Đặt `PIPELINE_SOURCE`, `PIPELINE_DATA_ROOT`, `VIETJOBS_CSV_PATH`, `PIPELINE_DATABASE_URL`, `AI_PLATFORM_IMPORT_URL` và `PIPELINE_SCHEDULE`; mặc định `@daily`. DAG có 2 retries, timeout 30 phút mỗi task, `catchup=True` và `max_active_runs=1`.
 

@@ -193,7 +193,7 @@ def export_payload_task(**context: object) -> str:
     path = Path(context["ti"].xcom_pull(task_ids="deduplicate_gold"))
     config = DeliveryConfig.from_env()
     if "PIPELINE_EXPORT_ROOT" not in os.environ:
-        # Keep exports with the run's data, as service.py does, not under the cwd.
+        # Keep exports with the run's data, not under the cwd.
         config = replace(config, export_root=_root() / "export")
     manifest = export_batches(
         path,

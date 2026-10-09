@@ -33,7 +33,6 @@ from job_pipeline.delivery import (
 from job_pipeline.metadata import DeliveryRecord, PipelineRun, make_session_factory
 from job_pipeline.pipeline import run_fake_jobs, run_pipeline
 from job_pipeline.quality import quality_report
-from job_pipeline.service import execute_fake_jobs
 from job_pipeline.sources.vietjobs import (
     SOURCE_FIELDS,
     map_vietjobs_row,
@@ -485,65 +484,6 @@ def test_legacy_success_and_retry_single_rejected_record(
         )
     assert result.delivered_records == 1
     assert calls == 1
-
-
-def test_service_run_status_for_rejection_and_failed_batch(
-    sessions, tmp_path: Path
-) -> None:
-    record = dict(
-        title="Engineer",
-        company="Acme",
-        location="Paris",
-        description="Build APIs",
-        source_url="https://realpython.github.io/fake-jobs/1.html",
-        posted_at=None,
-    )
-    with httpx.Client(
-        transport=httpx.MockTransport(
-            lambda request: httpx.Response(
-                200,
-                json={
-                    "processed": 1,
-                    "inserted": 0,
-                    "skipped_duplicates": 0,
-                    "failed": 1,
-                    "errors": [{"record": 1, "error": "company rejected"}],
-                },
-            )
-        )
-    ) as client:
-        _, report = execute_fake_jobs(
-            [record],
-            run_id="rejected",
-            collected_at=NOW,
-            sessions=sessions,
-            endpoint="https://example.test/jobs/import",
-            client=client,
-            asset_location="fixture",
-            root=tmp_path,
-        )
-    assert report.rejected_records == 1
-    with sessions() as session:
-        run = session.get(PipelineRun, "rejected")
-        assert (run.status, run.rejected_count) == ("succeeded", 1)
-
-    changed = {**record, "title": "Different"}
-    with httpx.Client(
-        transport=httpx.MockTransport(lambda request: httpx.Response(413))
-    ) as client:
-        with pytest.raises(RuntimeError, match="delivery batches failed"):
-            execute_fake_jobs(
-                [changed],
-                run_id="failed",
-                collected_at=NOW,
-                sessions=sessions,
-                endpoint="https://example.test/jobs/import",
-                client=client,
-                asset_location="fixture",
-                root=tmp_path,
-            )
-    with sessions() as session:
-        assert session.get(PipelineRun, "failed").status == "failed"
 
 
 def test_v1_record_is_quarantined_and_csv_e2e_does_not_redeliver(

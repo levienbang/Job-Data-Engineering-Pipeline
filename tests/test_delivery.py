@@ -29,7 +29,6 @@ from job_pipeline.metadata import (
     make_session_factory,
 )
 from job_pipeline.pipeline import run_fake_jobs
-from job_pipeline.service import execute_fake_jobs
 
 NOW = datetime(2026, 9, 30, tzinfo=UTC)
 
@@ -248,58 +247,6 @@ def test_missing_company_is_held_without_http(sessions, tmp_path: Path) -> None:
         batch = session.scalar(select(DeliveryBatch))
         assert batch.status == "blocked"
         assert batch.attempt_count == 0
-
-
-def test_standalone_service_tracks_run_and_source_checkpoint(
-    sessions, tmp_path: Path
-) -> None:
-    record = dict(
-        title="Engineer",
-        company="Example Labs",
-        location="Paris",
-        description="Build APIs",
-        source_url="https://realpython.github.io/fake-jobs/job-1.html",
-        posted_at=None,
-    )
-    calls = 0
-
-    def respond(request: httpx.Request) -> httpx.Response:
-        nonlocal calls
-        calls += 1
-        return httpx.Response(
-            200,
-            json={"processed": 1, "inserted": 1, "skipped_duplicates": 0, "failed": 0},
-        )
-
-    with httpx.Client(transport=httpx.MockTransport(respond)) as client:
-        first, first_delivery = execute_fake_jobs(
-            [record],
-            run_id="run-1",
-            collected_at=NOW,
-            sessions=sessions,
-            endpoint="https://example.test/jobs/import",
-            client=client,
-            asset_location="https://realpython.github.io/fake-jobs/",
-            root=tmp_path,
-        )
-        second, second_delivery = execute_fake_jobs(
-            [record],
-            run_id="run-2",
-            collected_at=NOW,
-            sessions=sessions,
-            endpoint="https://example.test/jobs/import",
-            client=client,
-            asset_location="https://realpython.github.io/fake-jobs/",
-            root=tmp_path,
-        )
-    assert first.bronze_checksum == second.bronze_checksum
-    assert first_delivery.delivered_records == 1
-    assert second_delivery.skipped_records == 1
-    assert calls == 1
-    with sessions() as session:
-        assert session.get(PipelineRun, "run-1").status == "succeeded"
-        assert session.get(PipelineRun, "run-2").duplicate_count == 1
-        assert session.scalar(select(SourceAsset)).last_run_id == "run-2"
 
 
 def test_failed_count_without_error_details_fails_batch(
