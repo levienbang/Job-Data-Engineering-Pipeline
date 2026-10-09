@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import logging
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from datetime import datetime
@@ -23,7 +24,8 @@ from job_pipeline.pipeline import (
     _empty_jobs,
     _json,
 )
-from job_pipeline.sources.technology import is_technology_job
+from job_pipeline.sources.arbeitnow import REQUIRED_COLUMNS, is_english
+from job_pipeline.sources.technology import is_technology_job, is_technology_title
 from job_pipeline.storage import read_parquet, sha256_file, write_parquet
 from job_pipeline.validate import ValidatedJob
 
@@ -52,7 +54,7 @@ def snapshot_bronze(
     collected_at: datetime,
     root: Path = Path("data"),
 ) -> BronzeStage:
-    if source not in {"vietjobs", "fake_jobs"}:
+    if source not in MAPPERS:
         raise ValueError(f"unsupported source: {source}")
     if collected_at.tzinfo is None:
         raise ValueError("collected_at needs a timezone")
@@ -97,6 +99,7 @@ def validate_clean_bronze(
     lineage: list[dict[str, object]] = []
     quarantine: list[dict[str, object]] = []
     filtered = 0
+    reasons = {"language": 0, "not_it": 0}
     for row in frame.to_dicts():
         raw = json.loads(row["raw_record_json"])
         if not isinstance(raw, dict):
@@ -112,7 +115,12 @@ def validate_clean_bronze(
             continue
         try:
             expected = VIETJOBS_COLUMNS if source == "vietjobs" else FAKE_JOBS_COLUMNS
-            if set(raw) != expected:
+            mismatch = (
+                (not REQUIRED_COLUMNS <= set(raw))
+                if source == "arbeitnow"
+                else set(raw) != expected
+            )
+            if mismatch:
                 raise SchemaDriftError(
                     "source record fields differ from expected schema"
                 )
@@ -144,6 +152,18 @@ def validate_clean_bronze(
                 }
             )
             continue
+        if source == "arbeitnow":
+            reason = (
+                "language"
+                if not is_english(job.raw_description)
+                else "not_it"
+                if not is_technology_title(job.raw_title)
+                else None
+            )
+            if reason:
+                reasons[reason] += 1
+                filtered += 1
+                continue
         mapped.append(job)
         lineage.append(
             {
@@ -152,6 +172,12 @@ def validate_clean_bronze(
                 "raw_record_json": row["raw_record_json"],
             }
         )
+
+    if source == "arbeitnow":
+        for reason, count in reasons.items():
+            logging.getLogger(__name__).info(
+                "Arbeitnow filtered reason=%s count=%s", reason, count
+            )
 
     valid: list[dict[str, object]] = []
     for row, trace in zip(clean_jobs(mapped).to_dicts(), lineage, strict=True):

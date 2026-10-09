@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import logging
 import os
 import sys
 from datetime import UTC, datetime
@@ -10,11 +11,17 @@ from pathlib import Path
 import httpx
 
 from job_pipeline.checkpoints import finish_delivery_run, finish_run, start_run
-from job_pipeline.config import DeliveryConfig
+from job_pipeline.config import DeliveryConfig, arbeitnow_max_pages
 from job_pipeline.delivery import deliver_gold, export_batches
 from job_pipeline.metadata import make_session_factory, new_run_id
-from job_pipeline.pipeline import run_fake_jobs, run_vietjobs
+from job_pipeline.pipeline import (
+    arbeitnow_watermark,
+    run_fake_jobs,
+    run_pipeline,
+    run_vietjobs,
+)
 from job_pipeline.quality import quality_report
+from job_pipeline.sources.arbeitnow import ArbeitnowSource
 from job_pipeline.sources.fake_jobs import FakeJobsCrawler
 
 
@@ -24,7 +31,7 @@ def main(argv: list[str] | None = None) -> int:
     for name in ("run", "export", "deliver"):
         command = commands.add_parser(name)
         command.add_argument(
-            "--source", choices=("vietjobs", "fake_jobs"), required=True
+            "--source", choices=("vietjobs", "fake_jobs", "arbeitnow"), required=True
         )
         command.add_argument("--root", type=Path, default=Path("data"))
         if name == "run":
@@ -43,6 +50,15 @@ def main(argv: list[str] | None = None) -> int:
                 if args.csv is None:
                     raise ValueError("--csv is required for VietJobs")
                 result = run_vietjobs(args.csv, collected_at=now, root=args.root)
+            elif args.source == "arbeitnow":
+                logging.basicConfig(level=logging.INFO)
+                source = ArbeitnowSource(
+                    max_pages=arbeitnow_max_pages(),
+                    watermark=arbeitnow_watermark(args.root),
+                )
+                result = run_pipeline(
+                    "arbeitnow", source.iter_raw(), collected_at=now, root=args.root
+                )
             else:
                 with FakeJobsCrawler() as crawler:
                     result = run_fake_jobs(
@@ -132,7 +148,7 @@ def main(argv: list[str] | None = None) -> int:
             )
         )
         return 1 if report.failed_batches else 0
-    except (OSError, ValueError, RuntimeError) as exc:
+    except (OSError, ValueError, RuntimeError, httpx.HTTPError) as exc:
         print(str(exc), file=sys.stderr)
         return 1
 

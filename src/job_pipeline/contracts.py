@@ -2,11 +2,12 @@
 
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Literal
 
 
 @dataclass(frozen=True, slots=True)
 class CanonicalJob:
-    source_name: str
+    source_name: Literal["fake_jobs", "vietjobs", "arbeitnow"]
     source_job_id: str | None
     source_url: str | None
     raw_title: str

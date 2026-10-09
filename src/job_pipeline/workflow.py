@@ -18,11 +18,12 @@ from job_pipeline.checkpoints import (
     start_run,
     update_run_counts,
 )
-from job_pipeline.config import DeliveryConfig
+from job_pipeline.config import DeliveryConfig, arbeitnow_max_pages
 from job_pipeline.delivery import deliver_gold, export_batches
 from job_pipeline.metadata import make_session_factory
-from job_pipeline.pipeline import read_vietjobs_rows
+from job_pipeline.pipeline import arbeitnow_watermark, read_vietjobs_rows
 from job_pipeline.quality import quality_report
+from job_pipeline.sources.arbeitnow import API_URL, ArbeitnowSource
 from job_pipeline.sources.fake_jobs import LIST_URL, FakeJobsCrawler
 from job_pipeline.stages import (
     BronzeStage,
@@ -43,7 +44,7 @@ def _root() -> Path:
 
 def _source() -> str:
     source = os.getenv("PIPELINE_SOURCE", "vietjobs")
-    if source not in {"vietjobs", "fake_jobs"}:
+    if source not in {"vietjobs", "fake_jobs", "arbeitnow"}:
         raise ValueError(f"unsupported PIPELINE_SOURCE: {source}")
     return source
 
@@ -65,7 +66,7 @@ def _collected_at(context: dict) -> datetime:
 
 
 def acquire_task(**context: object) -> dict[str, str]:
-    """Check local VietJobs input or crawl and persist Fake Jobs source records."""
+    """Check local VietJobs input or persist acquired HTTP source records."""
     source = _source()
     start_run(_sessions(), run_id=_run_id(context), source_name=source)
     if source == "vietjobs":
@@ -73,8 +74,14 @@ def acquire_task(**context: object) -> dict[str, str]:
         read_vietjobs_rows(path)
         return {"source": source, "path": str(path), "checksum": sha256_file(path)}
 
-    with FakeJobsCrawler() as crawler:
-        records = list(crawler.iter_raw())
+    if source == "arbeitnow":
+        adapter = ArbeitnowSource(
+            max_pages=arbeitnow_max_pages(), watermark=arbeitnow_watermark(_root())
+        )
+        records = list(adapter.iter_raw())
+    else:
+        with FakeJobsCrawler() as crawler:
+            records = list(crawler.iter_raw())
     content = json.dumps(
         records, ensure_ascii=False, sort_keys=True, default=str
     ).encode()
@@ -118,7 +125,13 @@ def bronze_task(**context: object) -> dict[str, object]:
     record_source_asset(
         _sessions(),
         source_name=source,
-        source_url_or_path=str(path) if source == "vietjobs" else LIST_URL,
+        source_url_or_path=(
+            str(path)
+            if source == "vietjobs"
+            else API_URL
+            if source == "arbeitnow"
+            else LIST_URL
+        ),
         content_hash=acquired["checksum"],
         run_id=_run_id(context),
     )

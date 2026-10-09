@@ -55,3 +55,31 @@ def is_technology_job(record: Mapping[str, str | None]) -> bool:
     if FALLBACK_EXCLUSIONS.search(title):
         return False
     return any(pattern.search(title) for pattern in TITLE_PATTERNS)
+
+
+# English job boards have no IT category column, so titles carry the whole
+# decision: keep technical roles, then drop non-software engineering and
+# commercial roles that share words like "engineer" or "data".
+ENGLISH_ROLE = re.compile(
+    r"\b(?:engineer(?:ing manager)?|developer|programmer|architect|"
+    r"(?:data|machine learning|research) scientist|scientist|devops|sre|"
+    r"(?:data|systems?|security|iam|bi) analyst|"
+    r"(?:system|database|network) administrator|tester|cto)\b",
+    re.IGNORECASE,
+)
+ENGLISH_EXCLUSIONS = re.compile(
+    r"\b(?:sales|pre[ -]?sales|marketing|account (?:executive|manager)|"
+    r"manufacturing|industriali[sz]ation|electrical|mechanical|optical|civil|"
+    r"chemical|hardware|architectural|draftsperson|payment|people|recruit\w*|"
+    r"talent)\b",
+    re.IGNORECASE,
+)
+
+
+def is_technology_title(title: str) -> bool:
+    """English title selection; leave VietJobs category/fallback behavior intact."""
+    if ENGLISH_EXCLUSIONS.search(title) or FALLBACK_EXCLUSIONS.search(title):
+        return False
+    return bool(ENGLISH_ROLE.search(title)) or any(
+        pattern.search(title) for pattern in TITLE_PATTERNS
+    )

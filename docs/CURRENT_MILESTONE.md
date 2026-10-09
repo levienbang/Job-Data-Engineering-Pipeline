@@ -1,14 +1,21 @@
-# Current milestone — không có
+# Không có milestone đang làm
 
-> Hiện **không có milestone đang làm**. Milestone 8 (Delivery-ready), 8.1 (dọn
-> luồng acquisition) và **8.2 (Docker Compose PostgreSQL + Airflow, chạy DAG thật)**
-> đã hoàn thành và nằm trên `main`. **Không implement lại gì từ file này.**
-> Milestone 9 Kafka/Snowflake trong `docs/PROJECT_SPEC.md` **không** được yêu cầu.
-> Khi có việc mới, user sẽ ghi đè file này bằng milestone mới.
+Đã hoàn thành Milestone 8, 8.1, 8.2 và **8.3 — Arbeitnow API incremental**.
 
-M8.2: build/pip check thành công; PostgreSQL và Airflow healthy, init exit 0;
-DAG sample chạy hai lần 8/8 task success. Sample có sẵn bị lọc IT toàn bộ, nên
-đã chạy thêm subset IT thật hai lần: Gold 5 → 5, duplicate_count 0 → 5,
-Bronze checksum/mtime không đổi. Metadata runs succeeded, DAG giữ paused,
-delivery tắt. Tests hiện có 93 passed, Ruff lint/format pass. Không đổi logic
-`src/job_pipeline/` hoặc repo `../LLM`. Chi tiết trong README mục Docker.
+Milestone 8.3 bổ sung:
+
+- Adapter Arbeitnow public API: allowlist, phân trang, rate limit, bounded retry
+  và watermark từ Gold trừ 60 phút; Bronze giữ nguyên mọi job.
+- Mapper canonical v2, giải mã HTML, lọc tiếng Anh rồi IT sau Bronze;
+  schema cho phép key thừa, thiếu key vào quarantine.
+- CLI `run --source arbeitnow`, Airflow acquisition snapshot và
+  `ARBEITNOW_MAX_PAGES`; không thêm dependency, DB table hay migration.
+- Tests fixture, rerun/dedup, CLI/workflow; kiểm tra API thật 1 trang mỗi lần,
+  không export/delivery. Gold 46 job lúc Codex kiểm tra; sau khi mở rộng bộ lọc IT, cùng trang cho Gold 82 job.
+
+Xem [báo cáo kiểm tra 8.3](MILESTONE_8_3_VERIFICATION.md) để biết số liệu,
+20 tiêu đề Gold, 10 tiêu đề bị lọc và giới hạn. Lần live thứ hai đọc watermark
+nhưng dừng do `max_pages=1`; fixture xác nhận dừng do watermark khi cả trang
+cũ hơn ngưỡng. Không thể yêu cầu trang có job mới đồng thời dừng vì watermark.
+
+Chờ yêu cầu milestone mới; không tự triển khai lại hay thêm hạ tầng optional.

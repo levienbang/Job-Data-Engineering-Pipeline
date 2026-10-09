@@ -13,7 +13,7 @@ Source.iter_raw() → snapshot_bronze()
 
 | File | Bước và trách nhiệm |
 |---|---|
-| `sources/base.py`, `sources/vietjobs.py`, `sources/fake_jobs.py` | `RawSource.iter_raw()` đọc CSV hoặc HTTP, giữ field nguồn; các mapper là hàm thuần, được gọi sau Bronze. Fake Jobs lưu HTML + metadata để audit. |
+| `sources/base.py`, `sources/vietjobs.py`, `sources/fake_jobs.py`, `sources/arbeitnow.py` | `RawSource.iter_raw()` đọc CSV hoặc HTTP, giữ field nguồn; các mapper là hàm thuần, được gọi sau Bronze. Fake Jobs lưu HTML + metadata để audit. |
 | `pipeline.py` | Entry point chạy các stage và bảng `MAPPERS` cho hai nguồn. |
 | `stages.py` | Snapshot Bronze bất biến → map, lọc IT, clean/validate/quarantine → Silver → deduplicate Gold. |
 | `quality.py` | Kiểm tra chất lượng Gold. |
@@ -26,7 +26,7 @@ Nguồn dữ liệu ban đầu là trang [Fake Jobs](https://realpython.github.i
 
 ## Trạng thái
 
-Hai nguồn VietJobs CSV và Fake Jobs HTML tạo cùng kiểu `CanonicalJob` v2. Gold giữ riêng `raw_description`, requirements, experience, technical/soft skills, qualifications, languages, benefits, salary, working hours, category và country. VietJobs không có company, URL và ngày đăng nên các field đó là `None`. `DeliveryMapper` chỉ ghép lại mô tả có nhãn khi tạo payload; giá trị Gold vẫn giữ cấu trúc gốc. Fake Jobs lưu HTML và metadata trong `data/raw_html/fake_jobs/`.
+Ba nguồn VietJobs CSV, Fake Jobs HTML và Arbeitnow API tạo cùng kiểu `CanonicalJob` v2. Gold giữ riêng `raw_description`, requirements, experience, technical/soft skills, qualifications, languages, benefits, salary, working hours, category và country. VietJobs không có company, URL và ngày đăng nên các field đó là `None`. `DeliveryMapper` chỉ ghép lại mô tả có nhãn khi tạo payload; giá trị Gold vẫn giữ cấu trúc gốc. Fake Jobs lưu HTML và metadata trong `data/raw_html/fake_jobs/`.
 
 Milestone 3–4 chạy độc lập: Bronze Parquet lưu JSON của từng source row và lineage, Silver chuẩn hóa Unicode NFC/khoảng trắng và kiểm tra Pydantic, Gold giữ canonical job đã loại trùng. VietJobs được lọc IT sau Bronze. Bản ghi lỗi vào `data/quarantine/` với `error_code` và `error_detail`; record ngoài phạm vi IT chỉ được đếm, không phải lỗi. Bronze có tên theo content hash và không bị ghi đè. Gold hợp nhất theo source ID nếu có, nếu không theo source content hash; timestamp thu thập không tham gia hash. `PipelineResult` có checksum Bronze, checksum CSV input khi dùng VietJobs, đường dẫn và số lượng mỗi nhóm.
 
@@ -275,7 +275,8 @@ Các biến cấu hình chung và Compose:
 | Biến | Giá trị / ý nghĩa |
 |---|---|
 | `VIETJOBS_CSV_PATH` | CSV local; Compose thêm prefix `/opt/airflow/` |
-| `PIPELINE_SOURCE` | `vietjobs` hoặc `fake_jobs` (Fake Jobs gọi mạng) |
+| `PIPELINE_SOURCE` | `vietjobs`, `fake_jobs` hoặc `arbeitnow` (hai nguồn sau gọi mạng) |
+| `ARBEITNOW_MAX_PAGES` | `5`, số nguyên ≥ 1; giới hạn trang Arbeitnow cho CLI và Airflow |
 | `PIPELINE_SCHEDULE` | `@daily` |
 | `PIPELINE_DATA_ROOT` | `data` trên host, `/opt/airflow/data` trong Compose |
 | `PIPELINE_DATABASE_URL` | URL metadata DE; host dùng cổng `5433`, Compose dùng `postgres:5432` |
@@ -289,3 +290,51 @@ Các biến cấu hình chung và Compose:
 | `AIRFLOW_FERNET_KEY` | Fernet key hợp lệ để mã hóa Airflow connections |
 | `AIRFLOW_WEBSERVER_SECRET_KEY` | Secret dùng chung cho webserver và scheduler |
 | `AIRFLOW_UID` | UID container, mặc định `50000` |
+
+
+## Arbeitnow API — incremental
+
+Nguồn public [Arbeitnow](https://www.arbeitnow.com/api/job-board-api?page=1)
+không cần key. Adapter chỉ gọi HTTPS trên `www.arbeitnow.com`, không theo
+redirect, timeout 30 giây, nghỉ ít nhất 1 giây giữa request; retry tối đa 3 lần
+cho lỗi mạng, timeout, 429 và 5xx, có backoff và tôn trọng `Retry-After`.
+URL trong `links.next` cũng được kiểm tra allowlist. Giữ URL tin tuyển dụng
+làm `source_url` để dẫn về nguồn (URL của job có thể thuộc Arbeitnow Pháp).
+
+Bronze giữ mọi job nguyên văn, kể cả tiếng Đức/Pháp và ngoài IT. Schema yêu
+cầu đủ các key Arbeitnow, cho phép key mới; thiếu key vào quarantine
+`SCHEMA_DRIFT`. Mapper giải mã HTML tối đa 3 lần rồi lấy text theo block,
+map slug thành source ID, Unix timestamp thành UTC và đánh dấu Remote trong
+location. Không suy diễn salary, experience hay skills. Hash SHA-256 dùng
+JSON sorted-key của toàn bộ raw record cùng source name, không chứa thời
+điểm thu thập; Gold dedup theo `(arbeitnow, slug)`.
+
+Sau schema check và mapping, chỉ Arbeitnow được lọc tiếng Anh bằng tỷ lệ
+stopword ≥ 0.10 trong description đã bỏ HTML, rồi lọc IT bằng tiêu đề.
+`filtered_count` gồm cả hai lý do; log riêng `language` và `not_it`. Record
+bị lọc không vào quarantine. Đây là heuristic, có thể bỏ sót vai trò hoặc
+mô tả đa ngôn ngữ; bộ lọc VietJobs không đổi.
+
+CLI và Airflow cùng đọc `max(posted_at)` từ Gold Arbeitnow, trừ 60 phút làm
+watermark; chưa có Gold hoặc chưa có ngày đăng thì dùng `None`. Adapter yield
+toàn bộ trang rồi mới dừng khi **mọi** job của trang cũ hơn watermark, hết
+`links.next`, hoặc đạt giới hạn trang. Một job cũ ghim đầu trang không làm
+dừng sớm. Gold vẫn dedup dữ liệu trong khoảng overlap. Log acquisition có
+`pages`, `stop_reason` và watermark để phân biệt lý do dừng.
+
+```bash
+# Có gọi mạng, chỉ chạy đến Gold/quality, không export/deliver hay gọi LLM.
+ARBEITNOW_MAX_PAGES=1 uv run python -m job_pipeline run --source arbeitnow --root /tmp/arbeitnow-check
+```
+
+Airflow: đặt `PIPELINE_SOURCE=arbeitnow`, `ARBEITNOW_MAX_PAGES=5`.
+`acquire_task` lưu snapshot JSON bất biến theo hash dưới
+`data/acquired/source=arbeitnow/ingestion_date=<date>/records-<hash>.json`;
+các task Bronze → quality → export → deliver dùng luồng chung. Trong DAG,
+`DELIVERY_ENABLED=false` vẫn export nhưng không POST như các nguồn khác.
+
+Giới hạn incremental: watermark lấy từ job đã qua lọc trong Gold, nên có
+thể đọc lại nhiều trang nếu không có job IT tiếng Anh mới. Với giới hạn một
+trang, lần chạy lại thường dừng vì `max_pages`, không phải watermark:
+trang vẫn chứa job mới hơn `max(posted_at) - 60 phút`. Các trang cũ hơn giới
+hạn chưa được backfill; đây là polling có giới hạn, không phải full backfill.

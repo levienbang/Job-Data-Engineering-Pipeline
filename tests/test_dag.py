@@ -226,3 +226,60 @@ def test_dag_run_status_for_rejection_and_failed_batch(
         _run_dag(monkeypatch, "failed", changed, lambda request: httpx.Response(413))
     with sessions() as session:
         assert _pipeline_run(session, "failed").status == "failed"
+
+
+def test_arbeitnow_workflow_through_quality_twice(monkeypatch, tmp_path):
+    import json
+    from datetime import UTC, datetime
+
+    from job_pipeline.sources.arbeitnow import ArbeitnowSource
+
+    sessions = _dag_environment(monkeypatch, tmp_path)
+    monkeypatch.setenv("PIPELINE_SOURCE", "arbeitnow")
+    monkeypatch.setenv("ARBEITNOW_MAX_PAGES", "5")
+    fixture = Path(__file__).parent / "fixtures" / "arbeitnow"
+
+    def respond(request):
+        body = json.loads(
+            (fixture / f"page-{request.url.params['page']}.json").read_text()
+        )
+        return httpx.Response(200, json=body)
+
+    with httpx.Client(transport=httpx.MockTransport(respond)) as client:
+        monkeypatch.setattr(
+            workflow,
+            "ArbeitnowSource",
+            lambda **kwargs: ArbeitnowSource(client, sleep=lambda _: None, **kwargs),
+        )
+
+        class TI:
+            def __init__(self):
+                self.values = {}
+
+            def xcom_pull(self, *, task_ids):
+                return self.values[task_ids]
+
+        for number in (1, 2):
+            ti = TI()
+            context = {
+                "ti": ti,
+                "run_id": f"arbeitnow-{number}",
+                "logical_date": datetime(2026, 10, 9, 12, tzinfo=UTC),
+            }
+            for name in (
+                "acquire",
+                "bronze",
+                "validate_clean",
+                "silver",
+                "deduplicate_gold",
+                "quality_check",
+            ):
+                ti.values[name] = getattr(workflow, f"{name}_task")(**context)
+            assert ti.values["quality_check"]["count"] == 8
+            assert ti.values["validate_clean"]["filtered_count"] == 7
+            with sessions() as session:
+                run = _pipeline_run(session, context["run_id"])
+                assert run.input_count == 15
+                assert run.valid_count == 8
+                assert run.invalid_count == 0
+                assert run.duplicate_count == (0 if number == 1 else 8)

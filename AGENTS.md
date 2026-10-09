@@ -82,7 +82,8 @@ Sources → Bronze → clean/validate → Silver → deduplicate → Gold
 - Quarantine invalid records with explicit reasons.
 - Split delivery files by serialized byte size.
 - Tests use fixtures, not live websites or paid APIs.
-- Supported sources are Fake Jobs and the published VietJobs dataset.
+- Supported sources are Fake Jobs, the published VietJobs dataset and the
+  public Arbeitnow job board API.
 - Respect allowlists, timeouts, rate limits and bounded retries.
 - Never bypass login, CAPTCHA, robots controls or anti-bot protections.
 

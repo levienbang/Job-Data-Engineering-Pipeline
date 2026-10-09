@@ -12,7 +12,7 @@ SHA256 = re.compile(r"^[0-9a-f]{64}$")
 class ValidatedJob(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
-    source_name: Literal["fake_jobs", "vietjobs"]
+    source_name: Literal["fake_jobs", "vietjobs", "arbeitnow"]
     source_job_id: str | None
     source_url: str | None
     raw_title: str

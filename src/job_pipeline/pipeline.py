@@ -1,4 +1,4 @@
-"""One acquisition path for both sources.
+"""One acquisition path for all sources.
 
 iter_raw → snapshot_bronze → validate_clean_bronze (map source rows)
 → publish_silver → deduplicate_gold → quality → export → deliver.
@@ -12,6 +12,7 @@ from pathlib import Path
 
 import polars as pl
 
+from job_pipeline.sources.arbeitnow import map_arbeitnow_row
 from job_pipeline.sources.fake_jobs import map_fake_jobs_row
 from job_pipeline.sources.vietjobs import VietJobsDatasetSource, map_vietjobs_row
 from job_pipeline.storage import sha256_file
@@ -105,7 +106,11 @@ def _json(value: Mapping[str, object]) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, default=str)
 
 
-MAPPERS = {"vietjobs": map_vietjobs_row, "fake_jobs": map_fake_jobs_row}
+MAPPERS = {
+    "vietjobs": map_vietjobs_row,
+    "fake_jobs": map_fake_jobs_row,
+    "arbeitnow": map_arbeitnow_row,
+}
 
 
 def run_pipeline(
@@ -177,3 +182,16 @@ def run_fake_jobs(
         collected_at=collected_at,
         root=root,
     )
+
+
+def arbeitnow_watermark(root: Path = Path("data")) -> datetime | None:
+    """Overlap the newest published Arbeitnow job by one hour."""
+    from datetime import timedelta
+
+    from job_pipeline.storage import read_parquet
+
+    path = root / "gold" / "source=arbeitnow" / "jobs.parquet"
+    if not path.exists():
+        return None
+    latest = read_parquet(path)["posted_at"].max()
+    return latest - timedelta(minutes=60) if latest is not None else None

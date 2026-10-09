@@ -51,3 +51,14 @@ class DeliveryConfig:
             )
         except ValueError as exc:
             raise ValueError(f"invalid delivery configuration: {exc}") from exc
+
+
+def arbeitnow_max_pages() -> int:
+    """Shared CLI/Airflow bound for public API acquisition."""
+    try:
+        value = int(os.getenv("ARBEITNOW_MAX_PAGES", "5"))
+        if value < 1:
+            raise ValueError
+    except ValueError as exc:
+        raise ValueError("ARBEITNOW_MAX_PAGES must be an integer >= 1") from exc
+    return value
