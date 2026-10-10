@@ -1,354 +1,184 @@
-# Job Data Engineering Pipeline
+# Job Data Pipeline
 
-Repo độc lập để thu thập và tiền xử lý dữ liệu việc làm trước khi gửi sang AI Career Platform qua API `/jobs/import`. AI Career Platform tiếp tục xử lý và lưu dữ liệu vào database của hệ thống đó.
+**Turns messy job data from a CSV dump and a live job-board API into clean, deduplicated,
+delivery-ready records — and never sends the same job twice.**
 
-## Luồng chính
+A batch data-engineering pipeline with a **Bronze → Silver → Gold** medallion design,
+Airflow orchestration, incremental loading and checkpointed delivery to an LLM platform.
 
-```text
-Source.iter_raw() → snapshot_bronze()
-  → validate_clean_bronze() [map_<source>_row ở đây]
-  → publish_silver() → deduplicate_gold() → quality → export → deliver
-  → POST /jobs/import → AI Career Platform
+[![CI](https://github.com/levienbang/data-ingestion-preprocessing/actions/workflows/ci.yml/badge.svg)](https://github.com/levienbang/data-ingestion-preprocessing/actions/workflows/ci.yml)
+![Python](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)
+![Airflow](https://img.shields.io/badge/Airflow-2.10-017CEE?logo=apacheairflow&logoColor=white)
+![Polars](https://img.shields.io/badge/Polars-Parquet-CD792C)
+![DuckDB](https://img.shields.io/badge/DuckDB-quality_checks-FFF000?logo=duckdb&logoColor=black)
+![PostgreSQL](https://img.shields.io/badge/PostgreSQL-17-4169E1?logo=postgresql&logoColor=white)
+
+> Clean jobs are delivered to the **[AI Career Intelligence Platform](https://github.com/levienbang/ai-career-platform)**,
+> which extracts skills with an LLM, powers semantic search and matches CVs.
+
+---
+
+## At a glance
+
+| Source | Type | Raw | Kept | Why the rest is dropped |
+|---|---|---|---|---|
+| **VietJobs** | Published CSV (48,092 rows, 103 MB) | 48,092 | **≈2,000 IT jobs** | Not IT (category + strict title rules) |
+| **Arbeitnow** | Live JSON API, paginated | 1,050 (6 pages) | **140 after dedup** | Not English, not an IT role, or no concrete technologies |
+| **Fake Jobs** | HTML scraping practice site | — | — | Crawler with allowlist and 1 req/s rate limit |
+
+- **207 offline tests** run in CI on every push — fixtures and mocked HTTP, no network or paid APIs.
+- **Re-runs are safe:** running the pipeline 10 times produces the same Gold and sends nothing twice.
+
+---
+
+## Pipeline
+
+```mermaid
+flowchart LR
+    subgraph SRC[Sources]
+        V[VietJobs CSV]
+        A[Arbeitnow API]
+        F[Fake Jobs HTML]
+    end
+
+    SRC --> BR[Bronze<br/>raw, immutable<br/>file name = content hash]
+    BR --> MAP[Map to one contract<br/>CanonicalJob]
+    MAP --> FIL{Source filters}
+    FIL -- out of scope --> CNT[Counted as filtered]
+    FIL --> VAL{Pydantic<br/>validation}
+    VAL -- invalid --> QR[Quarantine<br/>+ error reason]
+    VAL --> SI[Silver<br/>clean, typed]
+    SI --> GO[Gold<br/>deduplicated]
+    GO --> QC{Quality gate<br/>DuckDB}
+    QC --> EX[Export<br/>≤20 jobs, under 1 MB per batch<br/>+ manifest]
+    EX --> DL[Deliver<br/>retries + checkpoints]
+    DL -- "POST /jobs/import" --> AI([AI platform])
 ```
 
-| File | Bước và trách nhiệm |
+Every source only implements two things: **read raw records** and **map them to the shared
+contract**. From Bronze onward the same code handles all sources, so adding a fourth source
+is one new file in `sources/` plus one line in a registry.
+
+## Incremental loading from an API with no cursor
+
+Arbeitnow has no increasing ID, no `since` parameter, and returns pages that are **not strictly
+time-ordered** (blocks are sorted separately and concatenated). The pipeline handles it like this:
+
+```mermaid
+flowchart TD
+    W[Watermark = newest posted_at in Gold − 1 h overlap] --> P[Fetch page N<br/>1 req/s · retries on 429/5xx · host allowlist]
+    P --> K[Keep every record in Bronze]
+    K --> S{Every job on this page<br/>older than the watermark?}
+    S -- yes --> STOP1[Stop: stop_reason = watermark ✅]
+    S -- no --> M{Reached max pages?}
+    M -- yes --> STOP2[Stop: stop_reason = max_pages<br/>⚠️ possible gap — monitored]
+    M -- no --> P
+```
+
+Stopping at the **first** old job would miss newer jobs placed later in the feed; re-reading a
+few pages is free and the Gold dedup (by `slug`) absorbs the overlap.
+
+## Precision-first filtering
+
+Missing a few IT jobs is acceptable; letting a non-English or non-IT job reach the paid LLM
+step is not. A job must pass **three independent checks**:
+
+```mermaid
+flowchart LR
+    J[Job] --> L{English?<br/>English stopwords ≥ 10%<br/>and ≥ 2× German/French}
+    L -- no --> X1[filtered: language]
+    L --> T{IT title?<br/>explicit IT role, or<br/>role + IT qualifier}
+    T -- no --> X2[filtered: not_it]
+    T --> D{≥ 2 concrete technologies<br/>in the description?}
+    D -- no --> X3[filtered: no_tech_terms]
+    D --> OK[Kept]
+```
+
+Each run logs counts per reason and **warns when the kept share drifts** outside 3–50%,
+which usually means the source changed its format.
+
+---
+
+## Never send a job twice
+
+| Layer | Mechanism |
 |---|---|
-| `sources/base.py`, `sources/vietjobs.py`, `sources/fake_jobs.py`, `sources/arbeitnow.py` | `RawSource.iter_raw()` đọc CSV hoặc HTTP, giữ field nguồn; các mapper là hàm thuần, được gọi sau Bronze. Fake Jobs lưu HTML + metadata để audit. |
-| `pipeline.py` | Entry point chạy các stage và bảng `MAPPERS` cho hai nguồn. |
-| `stages.py` | Snapshot Bronze bất biến → map, lọc IT, clean/validate/quarantine → Silver → deduplicate Gold. |
-| `quality.py` | Kiểm tra chất lượng Gold. |
-| `delivery.py` | `DeliveryMapper` chuyển Gold sang import contract, export JSON theo byte và gửi API. |
-| `workflow.py`, `__main__.py` | Hai lối vào: các task Airflow (DAG) và CLI chạy tay. |
+| Bronze | File name is the content hash; written once, never overwritten |
+| Gold | Dedup key = (source, source ID), or a hash of the full record when there is no ID |
+| Export | Skips records already `accepted` (per-record checkpoint in PostgreSQL) |
+| Deliver | A batch still `sending` is not re-sent within the safety window |
+| Receiver | The AI platform deduplicates again by raw hash, URL and content hash |
 
-Thư mục `data/parsed/` từ các phiên bản cũ không còn được dùng; dữ liệu đã có trong đó được giữ nguyên.
+Delivery is **at-least-once with an idempotent receiver**: transient errors (timeouts, 429, 5xx)
+retry with back-off, 4xx errors do not, and each job ends as `accepted`, `rejected` or `blocked`.
 
-Nguồn dữ liệu ban đầu là trang [Fake Jobs](https://realpython.github.io/fake-jobs/) để thực hành crawling và bộ dữ liệu [VietJobs](https://huggingface.co/datasets/dinhieufam/VietJobs) đã công bố. Repo không ghi trực tiếp vào database của AI Career Platform.
+## Orchestration
 
-## Trạng thái
-
-Ba nguồn VietJobs CSV, Fake Jobs HTML và Arbeitnow API tạo cùng kiểu `CanonicalJob` v2. Gold giữ riêng `raw_description`, requirements, experience, technical/soft skills, qualifications, languages, benefits, salary, working hours, category và country. VietJobs không có company, URL và ngày đăng nên các field đó là `None`. `DeliveryMapper` chỉ ghép lại mô tả có nhãn khi tạo payload; giá trị Gold vẫn giữ cấu trúc gốc. Fake Jobs lưu HTML và metadata trong `data/raw_html/fake_jobs/`.
-
-Milestone 3–4 chạy độc lập: Bronze Parquet lưu JSON của từng source row và lineage, Silver chuẩn hóa Unicode NFC/khoảng trắng và kiểm tra Pydantic, Gold giữ canonical job đã loại trùng. VietJobs được lọc IT sau Bronze. Bản ghi lỗi vào `data/quarantine/` với `error_code` và `error_detail`; record ngoài phạm vi IT chỉ được đếm, không phải lỗi. Bronze có tên theo content hash và không bị ghi đè. Gold hợp nhất theo source ID nếu có, nếu không theo source content hash; timestamp thu thập không tham gia hash. `PipelineResult` có checksum Bronze, checksum CSV input khi dùng VietJobs, đường dẫn và số lượng mỗi nhóm.
-
-Operational metadata gồm `pipeline_runs`, `source_assets`, `delivery_batches` và `delivery_records`. Export tạo JSON batch cùng `manifest.json` trước khi gửi HTTP; file mặc định **nhỏ hơn 1.000.000 byte** và tối đa 20 record. Response thành công ghi từng record là `accepted` hoặc `rejected`; record bị từ chối chỉ gửi lại khi chọn `--retry-rejected`. Batch lỗi vẫn retry được. Application job data nằm trong Gold Parquet và được gửi qua multipart `file`.
-
-**Giới hạn VietJobs:** AI Platform hiện yêu cầu company sau extraction và có taxonomy skill nhỏ. CSV không có company. Mặc định record thiếu company được đánh `blocked`; đặt `DELIVERY_MISSING_COMPANY=send_null` để gửi `company: null` và quan sát phản hồi `rejected`. Đây là kết quả được dự kiến cho tới khi AI Platform được chỉnh, không phải lỗi Crawl. Không tạo company giả. Giới hạn upload của server thật chưa được xác nhận bằng integration test; tests mặc định dùng HTTP giả.
-
-```text
-data/bronze/source=<source>/ingestion_date=YYYY-MM-DD/jobs-<hash>.parquet
-data/silver/source=<source>/ingestion_date=YYYY-MM-DD/jobs-<hash>.parquet
-data/quarantine/source=<source>/ingestion_date=YYYY-MM-DD/jobs-<hash>.parquet
-data/gold/source=<source>/jobs.parquet
-data/export/source=<source>/run_id=<run_id>/batch-0001.json
-data/export/source=<source>/run_id=<run_id>/manifest.json
+```mermaid
+flowchart LR
+    a[acquire] --> b[bronze] --> c[validate_clean] --> d[silver] --> e[deduplicate_gold] --> f[quality_check] --> g[export_payload] --> h[deliver]
 ```
 
-Chạy VietJobs từ file CSV local:
+One Airflow DAG per scheduled source, built from the same eight tasks:
 
-```python
-from datetime import UTC, datetime
-from pathlib import Path
-from job_pipeline.pipeline import run_vietjobs
-
-result = run_vietjobs(Path("data/VietJobs.csv"), collected_at=datetime.now(UTC))
-print(result)
-```
-
-Fake Jobs: truyền `crawler.iter_raw()` vào `run_fake_jobs(records, collected_at=...)`; crawler lưu raw HTML trước khi trả dict thô. Kiểm tra Gold bằng `quality_report(result.gold_path)` (DuckDB trong `quality.py`), hoặc xem kết quả in ra từ `python -m job_pipeline run`. File CSV sai schema hoặc không đọc được sẽ dừng trước Bronze; lỗi từng row sẽ vào quarantine và các row khác vẫn tiếp tục.
-
-Kết quả kiểm tra toàn bộ 48.092 dòng VietJobs và giới hạn của dữ liệu nằm trong [ghi chú VietJobs](docs/VIETJOBS_INSPECTION.md). Kiến trúc và các mốc tiếp theo nằm trong [đặc tả dự án](docs/PROJECT_SPEC.md).
-
-## Cài đặt và kiểm tra
-
-```bash
-uv sync --python 3.12 --extra dev
-uv run pytest
-uv run ruff check .
-uv run ruff format --check .
-```
-
-Để chạy và test DAG với Airflow 2:
-
-```bash
-uv sync --python 3.12 --extra dev --extra airflow
-```
-
-Các lệnh kiểm tra dùng fixtures và HTTP giả, không gọi website hoặc LLM. Lệnh `uv sync` cần mạng nếu máy chưa có dependencies.
-
-## PostgreSQL metadata và Airflow
-
-Tạo PostgreSQL database riêng cho DE, đặt `PIPELINE_DATABASE_URL` như `.env.example`, rồi chạy:
-
-```bash
-uv run alembic upgrade head
-uv run alembic check
-```
-
-Migration không tạo bảng application jobs. Có thể chạy `alembic downgrade base` trong **database thử nghiệm** để kiểm tra rollback. Không chạy downgrade trên metadata production có dữ liệu.
-
-DAG (hoặc CLI `run` → `export` → `deliver`) chạy pipeline, quality check, export rồi delivery. Mỗi POST chứa file `jobs.json` trong multipart field `file`. Timeout mặc định 300 giây; timeout, lỗi mạng, 429 và 5xx tạm thời được thử tối đa ba lần. 413 và các 4xx khác không retry. Response 2xx có record lỗi vẫn làm batch `succeeded`: record lỗi là `rejected`, các record còn lại là `accepted`. Response sai contract làm batch `failed`. Không có exactly-once transaction xuyên hai hệ thống.
-
-[dags/job_pipeline.py](dags/job_pipeline.py) tạo **một DAG cho mỗi nguồn** từ cùng 8 task `acquire → bronze → validate_clean → silver → deduplicate_gold → quality_check → export_payload → deliver`: `job_pipeline_vietjobs` (CSV tĩnh, không lịch, chạy tay) và `job_pipeline_arbeitnow` (lịch `ARBEITNOW_SCHEDULE`, mặc định `@daily`). Mỗi DAG truyền nguồn qua `params.source`, nên hai nguồn chạy độc lập; `PIPELINE_SOURCE` chỉ còn là giá trị dự phòng. `DELIVERY_ENABLED=false` giữ export nhưng bỏ qua POST, kết thúc run `succeeded` với `delivered_count=0`. Đặt `PIPELINE_DATA_ROOT`, `VIETJOBS_CSV_PATH`, `PIPELINE_DATABASE_URL`, `AI_PLATFORM_IMPORT_URL`, `ARBEITNOW_MAX_PAGES` và `ARBEITNOW_SCHEDULE`. Mỗi DAG có 2 retries, timeout 30 phút mỗi task, `catchup=False` (API chỉ trả job hiện tại; CSV không đổi theo ngày) và `max_active_runs=1`. DAG mới được tạo ở trạng thái paused.
-
-## Chạy bằng Docker
-
-Docker Compose chạy PostgreSQL 17 và Airflow 2.10.5 / Python 3.12 với
-`LocalExecutor`. Image cài project theo constraints có sẵn của Airflow, giữ
-SQLAlchemy 1.4.54 và chạy `pip check` khi build. Không copy dataset hay secrets
-vào image. PostgreSQL có hai database và role riêng: `job_pipeline` cho DE,
-`airflow` cho Airflow; init chạy migrations cho cả hai trước khi khởi động
-scheduler và webserver.
-
-| Dịch vụ | Cổng host | Địa chỉ trong container |
+| DAG | Schedule | Notes |
 |---|---|---|
-| Crawl PostgreSQL | `127.0.0.1:5433` | `postgres:5432` |
-| Airflow UI | `127.0.0.1:8080` | `airflow:8080` |
-| AI Platform (`../LLM`) | `8000` | `host.docker.internal:8000` |
+| `job_pipeline_vietjobs` | manual | Static CSV |
+| `job_pipeline_arbeitnow` | `@daily`, 00:00 Vietnam time | Live sources use the real fetch time, not Airflow's logical date |
 
-Cổng `5432` của host được giữ cho PostgreSQL của LLM. Compose chỉ dùng database
-riêng của Crawl; giao tiếp sang LLM qua HTTP.
+Timestamps are stored in UTC; schedules and the Airflow UI use Vietnam time.
 
-1. Copy `.env.example` thành `.env` (git-ignored). Thay mọi giá trị
-   `replace-with-...`, dùng mật khẩu DB dạng hex để an toàn trong URL.
-   Tạo mỗi secret hex bằng `openssl rand -hex 32`; tạo Fernet key bằng lệnh ghi
-   trong `.env.example`. `AIRFLOW_ADMIN_USERNAME`, `AIRFLOW_ADMIN_PASSWORD` và
-   `AIRFLOW_ADMIN_EMAIL` dùng để tạo tài khoản khi init lần đầu. Đổi `.env`
-   sau đó không tự đổi mật khẩu user/database đã tồn tại.
-2. Đặt CSV local ở `data/VietJobs_sample.csv`. `VIETJOBS_CSV_PATH` trong `.env`
-   là đường dẫn tương đối dưới repo (ví dụ `data/VietJobs_sample.csv`); Compose
-   chuyển thành `/opt/airflow/data/VietJobs_sample.csv`. `PIPELINE_DATABASE_URL`,
-   `PIPELINE_DATA_ROOT`, `PIPELINE_EXPORT_ROOT` và `AI_PLATFORM_IMPORT_URL` trong
-   Compose dùng địa chỉ container, thay cho giá trị dành cho CLI host.
-3. Chạy:
+---
+
+## Quick start
 
 ```bash
-docker compose build
-docker compose up -d
-docker compose ps -a
-docker compose exec airflow python -m pip check
-docker compose exec airflow alembic check
+uv sync --extra dev
+uv run pytest                                   # 207 tests, offline
+
+# Run a source end to end (no delivery)
+uv run python -m job_pipeline run --source vietjobs --csv data/VietJobs.csv
+uv run python -m job_pipeline run --source arbeitnow
+
+# Airflow + PostgreSQL metadata
+cp .env.example .env && docker compose up --build -d   # UI: http://localhost:8080
 ```
 
-Mở [Airflow UI](http://localhost:8080), đăng nhập bằng tài khoản trong `.env`.
-`postgres` và `airflow` phải `healthy`; `airflow-init` phải `Exited (0)`.
-DAG **giữ paused khi khởi động** (`DAGS_ARE_PAUSED_AT_CREATION=True`) vì
-`catchup=True` sẽ chạy bù từ 2026-09-30 nếu unpause. `dags test` vẫn chạy DAG
-paused và không cần bật scheduler cho DAG này.
+Export and delivery (`python -m job_pipeline export / deliver`) need `PIPELINE_DATABASE_URL`;
+see [docs/REFERENCE.md](docs/REFERENCE.md).
 
-Chạy sample bằng Airflow thật, không POST sang LLM (lệnh này đọc CSV local và
-kết nối PostgreSQL của Compose):
+## Tech stack
 
-```bash
-docker compose exec -e VIETJOBS_CSV_PATH=/opt/airflow/data/VietJobs_sample.csv -e DELIVERY_ENABLED=false airflow airflow dags test job_pipeline_vietjobs "$(date +%F)"
-# Chạy lại đúng lệnh trên để kiểm tra Bronze bất biến và Gold không tăng trùng.
-docker compose exec postgres psql -U postgres -d job_pipeline -c 'SELECT run_id, status, input_count, valid_count, invalid_count, duplicate_count, delivered_count FROM pipeline_runs;'
-```
-
-Tám task phải success: `acquire`, `bronze`, `validate_clean`, `silver`,
-`deduplicate_gold`, `quality_check`, `export_payload`, `deliver`.
-`DELIVERY_ENABLED` mặc định **false trong Compose**; vẫn export và đóng run
-`succeeded`, `delivered_count=0`. Với chính sách company mặc định, các record
-VietJobs thiếu company được ghi `blocked` trong delivery metadata.
-
-Khi API LLM đang chạy trên host cổng 8000 và bạn muốn thử delivery thật,
-chạy lệnh sau (**gọi API, có thể kích hoạt LLM trả phí**):
-
-```bash
-docker compose exec -e DELIVERY_ENABLED=true -e DELIVERY_PAYLOAD_PROFILE=extended -e DELIVERY_MISSING_COMPANY=send_null airflow airflow dags test job_pipeline_vietjobs "$(date +%F)"
-```
-
-Chỉ dùng `extended` khi API hỗ trợ contract đó. Compose trỏ tới
-`http://host.docker.internal:8000/jobs/import`; không dùng `localhost` trong
-container và không truy cập PostgreSQL/Qdrant của LLM. Để áp dụng cấu hình
-`.env` cho scheduler, chạy lại `docker compose up -d`.
-
-Dữ liệu nằm trong bind mount `./data`; logs nằm trong volume `airflow-logs`,
-config Airflow tự sinh nằm cùng volume ở `logs/airflow.cfg`. Dừng và giữ metadata:
-
-```bash
-docker compose down
-```
-
-Xóa **metadata PostgreSQL và logs của Crawl** để khởi tạo lại:
-
-```bash
-docker compose down -v
-```
-
-`down -v` không xóa `./data`; Gold/Bronze vẫn còn. Không dùng lệnh này nếu cần
-giữ checkpoint delivery. Linux: đặt `AIRFLOW_UID` bằng `id -u` và đảm bảo
-`data/` ghi được bởi UID đó; macOS Docker Desktop dùng mặc định `50000`.
-
-### Kết quả chạy thật M8.2 — 2026-10-08
-
-`docker compose build` thành công, `python -m pip check` không có conflict;
-Airflow 2.10.5, SQLAlchemy 1.4.54, DuckDB 1.1.3, Polars 1.44.2.
-PostgreSQL và Airflow healthy, init exit 0; `alembic check` không có migration
-thiếu. Hai database có owner riêng và hai role không có quyền CONNECT chéo.
-
-| CSV / lần chạy | Input | Valid | Invalid | Filtered | Duplicate | Gold |
-|---|---:|---:|---:|---:|---:|---:|
-| `VietJobs_sample.csv`, lần 1 | 5 | 0 | 0 | 5 | 0 | 0 |
-| `VietJobs_sample.csv`, lần 2 | 5 | 0 | 0 | 5 | 0 | 0 |
-| Subset IT local, lần 1 | 5 | 5 | 0 | 0 | 0 | 5 |
-| Subset IT local, lần 2 | 5 | 5 | 0 | 0 | 5 | 5 |
-
-Cả bốn lần đều có **8/8 task success**, gồm acquire, bronze, validate_clean,
-silver, deduplicate_gold, quality_check, export_payload và deliver. Sample
-có sẵn không thuộc IT, nên để kiểm tra Gold có dữ liệu đã lấy thêm năm dòng IT
-thật từ `data/VietJobs.csv` vào `data/VietJobs_it_sample.csv` (git-ignored),
-không sửa các CSV gốc. Hai lần bổ sung dùng cùng ngày với logical time
-`2026-10-08T01:00:00+00:00` và override `VIETJOBS_CSV_PATH` trong lệnh `dags test`.
-
-Bronze giữ nguyên checksum và mtime sau rerun; Gold IT giữ năm hash duy nhất.
-Hai logical run trong `pipeline_runs` đều `succeeded`, `delivered_count=0`;
-rerun cùng logical date cập nhật cùng run ID. Năm record IT bị `blocked` bởi
-chính sách company mặc định. DAG vẫn paused, không có scheduled catchup run.
-API LLM cổng 8000 phản hồi HTTP 200 ở `/openapi.json`; bỏ qua bước import live
-tùy chọn, tất cả DAG run dùng `DELIVERY_ENABLED=false`.
-
-Checks hiện có: focused DAG/M8 tests **19 passed**; `uv run pytest` **93 passed**
-(hai Airflow deprecation warnings); Ruff lint và format pass. Tests dùng
-fixtures/HTTP giả; các lần `dags test` ở trên dùng Airflow và PostgreSQL thật,
-CSV local, không gọi website hoặc LLM.
-
-## Export và delivery thủ công
-
-```bash
-uv run python -m job_pipeline run --source vietjobs --csv data/VietJobs.csv --root data
-uv run python -m job_pipeline export --source vietjobs --root data
-uv run python -m job_pipeline deliver --source vietjobs --endpoint http://localhost:8000/jobs/import
-```
-
-`run` không cần DB. `export` và `deliver` cần `PIPELINE_DATABASE_URL` và migrations đã chạy. `export` chỉ ghi file và manifest; không gọi HTTP. `deliver` dùng manifest mới nhất của source hoặc `--manifest PATH`. `export --retry-rejected` và `--retry-blocked` cho phép đưa lại đúng record đó vào batch. Khi `DELIVERY_MISSING_COMPANY=send_null`, record trước đó bị `blocked` vì thiếu company được tự động export lại, không cần `--retry-blocked` (kể cả trong DAG). Số `delivered_count`/`rejected_count` của một run được đếm từ `delivery_records`, nên chạy lại `deliver` không ghi đè số liệu; `export` qua CLI tự đóng run của nó. CLI in summary JSON, trả exit code khác 0 khi có batch lỗi hoặc cấu hình sai.
-
-| Biến | Mặc định | Ý nghĩa |
-|---|---|---|
-| `DELIVERY_PAYLOAD_PROFILE` | `ai_platform_v1` | `ai_platform_v1` hoặc `extended` |
-| `DELIVERY_MISSING_COMPANY` | `block` | `block` hoặc `send_null` |
-| `DELIVERY_MAX_BYTES` | `1000000` | kích thước file phải nhỏ hơn giá trị này |
-| `DELIVERY_MAX_RECORDS` | `20` | tối đa record trong batch |
-| `DELIVERY_TIMEOUT_SECONDS` | `300` | timeout mỗi POST |
-| `DELIVERY_MAX_ATTEMPTS` | `3` | số lần thử tối đa |
-| `DELIVERY_ENABLED` | `true` (Python), `false` (Compose) | `false` để chỉ export trong DAG |
-| `PIPELINE_EXPORT_ROOT` | `data/export` | thư mục export |
-
-Profile `ai_platform_v1` gửi đúng sáu key: `title`, `company`, `location`, `employment_type`, `description`, `source_url`. Profile `extended` thêm lineage (`source_name`, `source_record_hash`, `posted_at`) và các field gốc còn lại theo tên không có tiền tố `raw_`; chỉ dùng khi endpoint hỗ trợ. Xem checkpoint bằng `SELECT record_key, status, error, updated_at FROM delivery_records;` trong metadata DB.
-
-## Kiểm tra VietJobs trên máy local
-
-Tải file CSV công bố (lệnh này **dùng mạng**):
-
-```bash
-mkdir -p data
-curl -L --fail https://huggingface.co/datasets/dinhieufam/VietJobs/resolve/main/VietJobs.csv -o data/VietJobs.csv
-```
-
-Xem schema, số dòng, null và số dòng thuộc phạm vi công nghệ (**chỉ đọc file local**):
-
-```bash
-uv run python scripts/inspect_vietjobs.py data/VietJobs.csv
-```
-
-`VietJobsDatasetSource.iter_raw()` đọc mọi dòng nguồn. Bộ lọc `is_technology_job(row)` được áp dụng sau khi đọc để quyết định dòng nào đi tiếp. Nó giữ category `công_nghệ_thông_tin_kỹ_thuật_số` và một số tiêu đề nghề công nghệ cụ thể ở category khác; không tìm từ khóa chung trong description. Trên toàn bộ file hiện tại, quy tắc giữ 2.043 dòng. Đây là quy tắc xác định phạm vi, chưa phải nhãn đúng tuyệt đối. `source_record_hash` dùng toàn bộ dòng CSV với thứ tự khóa ổn định, nên cùng nội dung có cùng hash khi chạy lại; nó không phải ID bền vững của một tin đã cập nhật.
-
-## Thử Fake Jobs thủ công
-
-Đoạn sau **dùng mạng**, lấy tối đa hai công việc và lưu HTML và metadata trong `data/raw_html/fake_jobs/`:
-
-```bash
-uv run python - <<'PY'
-from itertools import islice
-
-from job_pipeline.sources.fake_jobs import FakeJobsCrawler
-
-with FakeJobsCrawler() as source:
-    for raw in islice(source.iter_raw(), 2):
-        print(raw["source_url"], raw["title"])
-PY
-```
-
-Không commit dataset, raw dumps, Parquet output, `.env` hoặc credentials. Các file dữ liệu dùng khi chạy pipeline được lưu ở `data/` trên máy local.
-
-Các biến cấu hình chung và Compose:
-
-| Biến | Giá trị / ý nghĩa |
+| Layer | Tools |
 |---|---|
-| `VIETJOBS_CSV_PATH` | CSV local; Compose thêm prefix `/opt/airflow/` |
-| `PIPELINE_SOURCE` | Dự phòng khi task không có `params.source`: `vietjobs`, `fake_jobs` hoặc `arbeitnow` |
-| `ARBEITNOW_MAX_PAGES` | `5`, số nguyên ≥ 1; giới hạn trang Arbeitnow cho CLI và Airflow |
-| `ARBEITNOW_SCHEDULE` | Lịch DAG `job_pipeline_arbeitnow`, mặc định `@daily` |
-| `PIPELINE_DATA_ROOT` | `data` trên host, `/opt/airflow/data` trong Compose |
-| `PIPELINE_DATABASE_URL` | URL metadata DE; host dùng cổng `5433`, Compose dùng `postgres:5432` |
-| `AI_PLATFORM_IMPORT_URL` | Host: `http://localhost:8000/jobs/import`; Compose: `http://host.docker.internal:8000/jobs/import` |
-| `AI_PLATFORM_API_KEY` | Trống khi chạy local; đặt bằng `ADMIN_API_KEY` của platform khi platform bật bảo vệ. Gửi trong header `X-API-Key`, không ghi vào log |
-| `POSTGRES_PASSWORD` | Mật khẩu role quản trị PostgreSQL của Crawl |
-| `PIPELINE_DB_PASSWORD` | Mật khẩu role `job_pipeline` (Compose tạo URL DE) |
-| `AIRFLOW_DB_PASSWORD` | Mật khẩu role `airflow` |
-| `AIRFLOW_ADMIN_USERNAME` | Username UI tạo khi init |
-| `AIRFLOW_ADMIN_PASSWORD` | Mật khẩu UI tạo khi init |
-| `AIRFLOW_ADMIN_EMAIL` | Email admin, mặc định `admin@example.invalid` |
-| `AIRFLOW_FERNET_KEY` | Fernet key hợp lệ để mã hóa Airflow connections |
-| `AIRFLOW_WEBSERVER_SECRET_KEY` | Secret dùng chung cho webserver và scheduler |
-| `AIRFLOW_UID` | UID container, mặc định `50000` |
+| Ingestion | HTTPX, Beautiful Soup |
+| Storage & transform | Polars, Parquet, DuckDB, Pydantic |
+| Metadata | PostgreSQL 17, SQLAlchemy, Alembic |
+| Orchestration | Airflow 2.10 (LocalExecutor), Docker Compose |
+| Quality | Ruff, Pytest, GitHub Actions |
 
+## Project layout
 
-## Arbeitnow API — incremental
-
-Nguồn public [Arbeitnow](https://www.arbeitnow.com/api/job-board-api?page=1)
-không cần key. Adapter chỉ gọi HTTPS trên `www.arbeitnow.com`, không theo
-redirect, timeout 30 giây, nghỉ ít nhất 1 giây giữa request; retry tối đa 3 lần
-cho lỗi mạng, timeout, 429 và 5xx, có backoff và tôn trọng `Retry-After`.
-URL trong `links.next` cũng được kiểm tra allowlist. Giữ URL tin tuyển dụng
-làm `source_url` để dẫn về nguồn (URL của job có thể thuộc Arbeitnow Pháp).
-
-Bronze giữ mọi job nguyên văn, kể cả tiếng Đức/Pháp và ngoài IT. Schema yêu
-cầu đủ các key Arbeitnow, cho phép key mới; thiếu key vào quarantine
-`SCHEMA_DRIFT`. Mapper giải mã HTML tối đa 3 lần rồi lấy text theo block,
-map slug thành source ID, Unix timestamp thành UTC và đánh dấu Remote trong
-location. Không suy diễn salary, experience hay skills. Hash SHA-256 dùng
-JSON sorted-key của toàn bộ raw record cùng source name, không chứa thời
-điểm thu thập; Gold dedup theo `(arbeitnow, slug)`.
-
-Sau schema check và mapping, chỉ Arbeitnow đi qua bộ lọc **ưu tiên chính xác**
-(thà bỏ sót job IT còn hơn để lọt job không phải IT hoặc không phải tiếng Anh).
-Job phải qua cả ba lớp, trượt một lớp là bị loại:
-
-1. `language`: trong description đã bỏ HTML, tỷ lệ stopword tiếng Anh ≥ 0.10
-   và ≥ 2 lần tỷ lệ stopword tiếng Đức hoặc tiếng Pháp (loại tin song ngữ).
-2. `not_it`: tiêu đề chứa vai trò IT rõ ràng (developer, software engineer,
-   data scientist…) hoặc danh từ vai trò (engineer, architect, lead…) đi kèm
-   từ IT (software, data, AI, cloud, security…); loại sales, marketing,
-   manufacturing, product manager, consultant, designer… Tiêu đề chung chung
-   như "Solutions Engineer" bị loại.
-3. `no_tech_terms`: description phải nhắc ít nhất 2 công nghệ cụ thể khác nhau
-   (Python, SQL, AWS, Docker, React…).
-
-`filtered_count` gồm cả ba lý do, log riêng từng lý do; record bị lọc không vào
-quarantine. Log cảnh báo khi tỷ lệ giữ lại nằm ngoài 3–50% (input ≥ 50), dấu
-hiệu nguồn đổi định dạng. Trên 6 trang thật (1.050 job): giữ 140 job sau dedup.
-Bộ lọc VietJobs không đổi.
-
-CLI và Airflow cùng đọc `max(posted_at)` từ Gold Arbeitnow, trừ 60 phút làm
-watermark; chưa có Gold hoặc chưa có ngày đăng thì dùng `None`. Adapter yield
-toàn bộ trang rồi mới dừng khi **mọi** job của trang cũ hơn watermark, hết
-`links.next`, hoặc đạt giới hạn trang. Một job cũ ghim đầu trang không làm
-dừng sớm. Gold vẫn dedup dữ liệu trong khoảng overlap. Log acquisition có
-`pages`, `stop_reason` và watermark để phân biệt lý do dừng.
-
-```bash
-# Có gọi mạng, chỉ chạy đến Gold/quality, không export/deliver hay gọi LLM.
-ARBEITNOW_MAX_PAGES=1 uv run python -m job_pipeline run --source arbeitnow --root /tmp/arbeitnow-check
+```
+src/job_pipeline/
+  sources/      vietjobs.py · arbeitnow.py · fake_jobs.py · technology.py (filters)
+  stages.py     Bronze → validate/clean → Silver → Gold
+  quality.py    DuckDB checks
+  delivery.py   export batches + checkpointed HTTP delivery
+  checkpoints.py · metadata.py   PostgreSQL run / batch / record state
+  workflow.py   Airflow tasks        __main__.py   CLI
+dags/           one DAG per source
+tests/          fixtures + mocked HTTP
 ```
 
-Airflow: bật DAG `job_pipeline_arbeitnow` (hoặc `airflow dags trigger job_pipeline_arbeitnow`); `ARBEITNOW_MAX_PAGES=5`.
-`acquire_task` lưu snapshot JSON bất biến theo hash dưới
-`data/acquired/source=arbeitnow/ingestion_date=<date>/records-<hash>.json`;
-các task Bronze → quality → export → deliver dùng luồng chung. Trong DAG,
-`DELIVERY_ENABLED=false` vẫn export nhưng không POST như các nguồn khác.
+## Known limitations
 
-Giới hạn incremental: watermark lấy từ job đã qua lọc trong Gold, nên có
-thể đọc lại nhiều trang nếu không có job IT tiếng Anh mới. Với giới hạn một
-trang, lần chạy lại thường dừng vì `max_pages`, không phải watermark:
-trang vẫn chứa job mới hơn `max(posted_at) - 60 phút`. Các trang cũ hơn giới
-hạn chưa được backfill; đây là polling có giới hạn, không phải full backfill.
+- Arbeitnow can still miss jobs when more new postings arrive than `ARBEITNOW_MAX_PAGES` covers
+  (visible as `stop_reason=max_pages`); running hourly or raising the page limit reduces it.
+- Filters are rules, not a classifier: precise, but some IT roles with generic titles are skipped.
+- No job expiry yet: postings removed from a source are not withdrawn downstream.
+
+---
+
+**Deeper details** — settings, Docker, delivery semantics, milestone notes: [docs/REFERENCE.md](docs/REFERENCE.md) ·
+VietJobs profiling: [docs/VIETJOBS_INSPECTION.md](docs/VIETJOBS_INSPECTION.md)
