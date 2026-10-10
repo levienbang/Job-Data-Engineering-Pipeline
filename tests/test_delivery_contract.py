@@ -1,4 +1,4 @@
-"""Milestone 8 contract, export, and response behavior using local fixtures."""
+"""Gold contract v2, export batches and delivery responses, using local fixtures."""
 
 import csv
 import hashlib

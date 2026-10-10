@@ -59,7 +59,7 @@ print(result)
 
 Fake Jobs: truyền `crawler.iter_raw()` vào `run_fake_jobs(records, collected_at=...)`; crawler lưu raw HTML trước khi trả dict thô. Kiểm tra Gold bằng `quality_report(result.gold_path)` (DuckDB trong `quality.py`), hoặc xem kết quả in ra từ `python -m job_pipeline run`. File CSV sai schema hoặc không đọc được sẽ dừng trước Bronze; lỗi từng row sẽ vào quarantine và các row khác vẫn tiếp tục.
 
-Kết quả kiểm tra toàn bộ 48.092 dòng VietJobs và giới hạn của dữ liệu nằm trong [ghi chú VietJobs](VIETJOBS_INSPECTION.md). Kiến trúc và các mốc tiếp theo nằm trong [đặc tả dự án](PROJECT_SPEC.md).
+Kết quả kiểm tra toàn bộ 48.092 dòng VietJobs và giới hạn của dữ liệu nằm trong [ghi chú VietJobs](VIETJOBS_INSPECTION.md).
 
 ## Cài đặt và kiểm tra
 
