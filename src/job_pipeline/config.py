@@ -1,7 +1,7 @@
 """Validated environment configuration for export and delivery."""
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from math import isfinite
 from pathlib import Path
 
@@ -16,6 +16,8 @@ class DeliveryConfig:
     max_attempts: int = 3
     enabled: bool = True
     export_root: Path = Path("data/export")
+    # Sent as X-API-Key when the platform requires it; hidden from repr/logs.
+    api_key: str | None = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
         if self.profile not in {"ai_platform_v1", "extended"}:
@@ -48,6 +50,7 @@ class DeliveryConfig:
                 max_attempts=int(os.getenv("DELIVERY_MAX_ATTEMPTS", "3")),
                 enabled=enabled == "true",
                 export_root=Path(os.getenv("PIPELINE_EXPORT_ROOT", "data/export")),
+                api_key=os.getenv("AI_PLATFORM_API_KEY") or None,
             )
         except ValueError as exc:
             raise ValueError(f"invalid delivery configuration: {exc}") from exc

@@ -664,3 +664,33 @@ def test_send_null_releases_records_blocked_by_missing_company(
         (released.path.parent / released.batches[0]["file"]).read_text()
     )
     assert payload[0]["company"] is None
+
+
+@pytest.mark.parametrize("api_key", [None, "s3cret"])
+def test_delivery_sends_platform_api_key_only_when_configured(
+    sessions, tmp_path: Path, api_key
+) -> None:
+    gold = _gold(tmp_path, 1)
+    start_run(sessions, run_id="run-1", source_name="fake_jobs")
+    seen = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        seen.append(request.headers.get("X-API-Key"))
+        return httpx.Response(
+            200,
+            json={"processed": 1, "inserted": 1, "skipped_duplicates": 0, "failed": 0},
+        )
+
+    config = DeliveryConfig(export_root=tmp_path / "export", api_key=api_key)
+    with httpx.Client(transport=httpx.MockTransport(respond)) as client:
+        result = deliver_gold(
+            gold,
+            run_id="run-1",
+            sessions=sessions,
+            endpoint="https://example.test/jobs/import",
+            client=client,
+            config=config,
+        )
+    assert result.failed_batches == 0
+    assert seen == [api_key]
+    assert "s3cret" not in repr(config)

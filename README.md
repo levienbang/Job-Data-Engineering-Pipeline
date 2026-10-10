@@ -281,6 +281,7 @@ Các biến cấu hình chung và Compose:
 | `PIPELINE_DATA_ROOT` | `data` trên host, `/opt/airflow/data` trong Compose |
 | `PIPELINE_DATABASE_URL` | URL metadata DE; host dùng cổng `5433`, Compose dùng `postgres:5432` |
 | `AI_PLATFORM_IMPORT_URL` | Host: `http://localhost:8000/jobs/import`; Compose: `http://host.docker.internal:8000/jobs/import` |
+| `AI_PLATFORM_API_KEY` | Trống khi chạy local; đặt bằng `ADMIN_API_KEY` của platform khi platform bật bảo vệ. Gửi trong header `X-API-Key`, không ghi vào log |
 | `POSTGRES_PASSWORD` | Mật khẩu role quản trị PostgreSQL của Crawl |
 | `PIPELINE_DB_PASSWORD` | Mật khẩu role `job_pipeline` (Compose tạo URL DE) |
 | `AIRFLOW_DB_PASSWORD` | Mật khẩu role `airflow` |

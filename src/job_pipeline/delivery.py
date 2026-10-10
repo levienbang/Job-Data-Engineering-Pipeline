@@ -445,6 +445,7 @@ def deliver_gold(
                 response = client.post(
                     endpoint,
                     files={"file": ("jobs.json", payload, "application/json")},
+                    headers={"X-API-Key": config.api_key} if config.api_key else None,
                     timeout=config.timeout_seconds,
                 )
                 response_status = response.status_code
