@@ -28,3 +28,11 @@ data/**
 
 # OS files
 .DS_Store
+
+# Local-only working notes for coding agents (kept on disk, not published)
+AGENTS.md
+.serena/
+.vscode/
+docs/PROJECT_SPEC.md
+docs/CURRENT_MILESTONE.md
+docs/MILESTONE_*.md
