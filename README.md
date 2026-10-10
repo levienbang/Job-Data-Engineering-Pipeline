@@ -6,7 +6,7 @@ delivery-ready records — and never sends the same job twice.**
 A batch data-engineering pipeline with a **Bronze → Silver → Gold** medallion design,
 Airflow orchestration, incremental loading and checkpointed delivery to an LLM platform.
 
-[![CI](https://github.com/levienbang/data-ingestion-preprocessing/actions/workflows/ci.yml/badge.svg)](https://github.com/levienbang/data-ingestion-preprocessing/actions/workflows/ci.yml)
+[![CI](https://github.com/levienbang/Job-Data-Engineering-Pipeline/actions/workflows/ci.yml/badge.svg)](https://github.com/levienbang/Job-Data-Engineering-Pipeline/actions/workflows/ci.yml)
 ![Python](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)
 ![Airflow](https://img.shields.io/badge/Airflow-2.10-017CEE?logo=apacheairflow&logoColor=white)
 ![Polars](https://img.shields.io/badge/Polars-Parquet-CD792C)
