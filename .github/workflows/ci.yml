@@ -1,9 +1,18 @@
 name: CI
 
+# Documentation-only changes skip CI; any code, config or test change still runs it.
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+      - ".serena/**"
   pull_request:
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+      - ".serena/**"
 
 permissions:
   contents: read
