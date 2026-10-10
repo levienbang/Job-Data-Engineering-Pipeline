@@ -26,11 +26,11 @@ milestone is complete, do not re-implement it; wait for a new request.
 
 ## Git workflow
 
-- Never commit or push to `main`. Create a branch per milestone or change
-  (for example `feat/arbeitnow-source`, `fix/watermark`, `chore/ci`).
-- Push the branch and open a pull request into `main`; CI must pass. The user
-  reviews and merges every pull request manually.
-- After a merge, start new work from an updated `main`.
+- Never commit or push to `main`. All work goes on the shared `dev` branch.
+- Push `dev` and open (or update) a pull request from `dev` into `main`; CI
+  must pass. The user reviews and merges every pull request manually.
+- Merge with a merge commit (not squash) so `dev` stays in line with `main`;
+  if `main` moved, merge `main` into `dev` before continuing.
 
 ## Serena
 
