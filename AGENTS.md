@@ -24,6 +24,14 @@ milestone is complete, do not re-implement it; wait for a new request.
 - Never commit datasets, raw dumps, `.env`, credentials or private data.
 - Do not add optional infrastructure unless the current milestone requires it.
 
+## Git workflow
+
+- Never commit or push to `main`. Create a branch per milestone or change
+  (for example `feat/arbeitnow-source`, `fix/watermark`, `chore/ci`).
+- Push the branch and open a pull request into `main`; CI must pass. The user
+  reviews and merges every pull request manually.
+- After a merge, start new work from an updated `main`.
+
 ## Serena
 
 Use Serena for semantic code navigation.
