@@ -119,12 +119,20 @@ flowchart LR
     a[acquire] --> b[bronze] --> c[validate_clean] --> d[silver] --> e[deduplicate_gold] --> f[quality_check] --> g[export_payload] --> h[deliver]
 ```
 
+![Airflow graph of job_pipeline_arbeitnow with all eight tasks successful](docs/images/airflow-dag.png)
+
+*An existing successful Arbeitnow run across all eight pipeline tasks.*
+
 One Airflow DAG per scheduled source, built from the same eight tasks:
 
 | DAG | Schedule | Notes |
 |---|---|---|
 | `job_pipeline_vietjobs` | manual | Static CSV |
 | `job_pipeline_arbeitnow` | `@daily`, 00:00 Vietnam time | Live sources use the real fetch time, not Airflow's logical date |
+
+![Airflow DAG list showing four successful Arbeitnow runs and eight successful recent tasks](docs/images/airflow-runs.png)
+
+*The DAG list shows four successful Arbeitnow runs and eight successful recent tasks.*
 
 Timestamps are stored in UTC; schedules and the Airflow UI use Vietnam time.
 
