@@ -6,8 +6,9 @@ One DAG per source, built from the same tasks. Each DAG passes its source in
 """
 
 import os
-from datetime import UTC, datetime, timedelta
+from datetime import timedelta
 
+import pendulum
 from airflow import DAG
 from airflow.operators.python import PythonOperator
 
@@ -23,6 +24,7 @@ from job_pipeline.workflow import (
     validate_clean_task,
 )
 
+LOCAL_TIMEZONE = "Asia/Ho_Chi_Minh"
 DEFAULT_ARGS = {
     "retries": 2,
     "retry_delay": timedelta(minutes=2),
@@ -53,7 +55,8 @@ SOURCES = {
 def build_dag(source: str, *, schedule: str | None, catchup: bool) -> DAG:
     with DAG(
         dag_id=f"job_pipeline_{source}",
-        start_date=datetime(2026, 10, 1, tzinfo=UTC),
+        # Schedules run in Vietnam time (@daily = 00:00 ICT); data stays UTC.
+        start_date=pendulum.datetime(2026, 10, 1, tz=LOCAL_TIMEZONE),
         schedule=schedule,
         catchup=catchup,
         max_active_runs=1,

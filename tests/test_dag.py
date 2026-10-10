@@ -52,6 +52,7 @@ def test_airflow_dag_import_and_dependencies(monkeypatch, tmp_path: Path) -> Non
             assert task.retries == 2
             assert task.execution_timeout == timedelta(minutes=30)
     assert module.dags["vietjobs"].schedule_interval is None
+    assert module.dags["arbeitnow"].timezone.name == "Asia/Ho_Chi_Minh"
     assert module.dags["arbeitnow"].schedule_interval == "@daily"
 
 

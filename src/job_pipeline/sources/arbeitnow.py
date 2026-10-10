@@ -11,6 +11,7 @@ from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
 from math import isfinite
 from urllib.parse import urlsplit
+from zoneinfo import ZoneInfo
 
 import httpx
 from bs4 import BeautifulSoup
@@ -93,6 +94,8 @@ FRENCH_STOPWORDS = {
     "au",
 }
 LOGGER = logging.getLogger(__name__)
+# Display only: stored timestamps and comparisons stay in UTC.
+VIETNAM = ZoneInfo("Asia/Ho_Chi_Minh")
 
 
 def description_text(value: str) -> str:
@@ -331,10 +334,12 @@ class ArbeitnowSource:
                     break
                 url = next_url
             LOGGER.info(
-                "Arbeitnow acquisition pages=%s stop_reason=%s watermark=%s",
+                "Arbeitnow acquisition pages=%s stop_reason=%s watermark=%s "
+                "(Vietnam time %s)",
                 self.pages_fetched,
                 self.stop_reason,
                 self.watermark,
+                self.watermark.astimezone(VIETNAM) if self.watermark else None,
             )
         finally:
             if self.client is None:
